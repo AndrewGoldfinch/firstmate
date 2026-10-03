@@ -82,3 +82,17 @@ npm init -y && npm install @earendil-works/pi-durable@1.0.1 @earendil-works/pi-a
 ```
 
 See `05-p0-source-verification.md` for the probe results.
+
+## Deterministic Durable tests (faux model)
+
+No real model or credentials are needed: use Pi's faux provider.
+
+```js
+import { createModels, fauxProvider, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+const models = createModels();
+const faux = fauxProvider();
+models.setProvider(faux.provider);
+faux.setResponses([fauxAssistantMessage([fauxToolCall("my_tool", {})], { stopReason: "toolUse" }), fauxAssistantMessage("final")]);
+```
+
+Note: a turn that calls a tool must set `{ stopReason: "toolUse" }`. With the default `"stop"`, the harness treats the message as the final answer and never runs the tool (observed directly).

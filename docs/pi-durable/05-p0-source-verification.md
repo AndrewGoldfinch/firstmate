@@ -99,15 +99,16 @@ Run with Pi's faux provider (`fauxProvider` + `fauxAssistantMessage`), so no rea
 | Reopen the SQLite store, `harness.resume()` | ok; `resume` is callable |
 | Root conversation identity across restart | stable |
 | `requestId` dedup across restart | returns the original submission |
+| Tool with `replay: "safe"`, SIGKILL mid-tool, reopen + `resume()` | tool **reran** (marker 1 line -> 2) |
+| Tool with no `replay`, SIGKILL mid-tool, reopen + `resume()` | tool did **not** rerun (marker stayed at 1 line); the model is told the call was interrupted |
+| Ungraceful SIGKILL, then reopen + `resume()` | continuation works; the interrupted run completes |
 
 **Consequence for R5:** Durable's `requestId` dedup does **not** refuse a changed payload under the same ID — it silently returns the original. The adapter must store and compare a payload/configuration digest and refuse a mismatch itself.
 
 Still open (each needs a small deterministic experiment against the pinned revision):
 
-- tool `replay` declarations: interrupted-safe rerun vs interrupted-unsafe report;
 - cancellation scope for foreground and background ownership, including process-group termination;
 - observation/reconnect/cursor/snapshot APIs and event durability;
-- store reopen after an **ungraceful** process kill mid-run, then `resume()` continuation (the reopen above was a graceful close);
 - SQLite durability settings and the supported JavaScript runtime range.
 
 ## Baseline test capture
@@ -117,12 +118,12 @@ Still open (each needs a small deterministic experiment against the pinned revis
 ## Open P0 items
 
 1. Pin the upstream source commit inside `github.com/earendil-works/pi` (npm versions are pinned; the git commit is not).
-2. Finish the deterministic Durable experiments: tool `replay`, cancellation scope, observation/reconnect, ungraceful-crash reopen + `resume()`, SQLite durability settings. (`requestId` dedup is verified; the changed-payload conflict must be enforced by the adapter.)
+2. Finish the deterministic Durable experiments: cancellation scope, observation/reconnect, SQLite durability settings. (`requestId` dedup/replay/ungraceful-reopen are verified; the changed-payload conflict must be enforced by the adapter.)
 3. Record full-suite (`--all`) baseline results in `development.md` (lint verified in changed-file mode; the two named tests pass).
 4. Confirm the P1C configuration syntax against `docs/configuration.md` conventions.
 5. Decide which of R4/R5/R9/R10 need adapter-owned contracts versus upstream guarantees, and implement the adapter store-owner lock that the default SQLite storage does not provide.
 
 ## Honest status
 
-Verified: entry-point existence and roles; the existing outcome/lease/prompt/dispatch contracts; toolchain pins; the two named supervision-branch tests pass; the Pi Durable library API surface, offline `Harness.open` + root creation, `resume` presence, the absence of a default exclusive store lock, `requestId` dedup within and across a restart, graceful reopen with stable root identity, and the fact that a changed payload under a reused `requestId` is **not** refused by Durable.
-Not verified: tool `replay`, cancellation and cleanup, observation/reconnect, continuation after an ungraceful kill, SQLite durability settings; and no prototype code or Durable integration test has been written or run.
+Verified: entry-point existence and roles; the existing outcome/lease/prompt/dispatch contracts; toolchain pins; the two named supervision-branch tests pass; the Pi Durable library API surface, offline `Harness.open` + root creation, `resume` presence, the absence of a default exclusive store lock, `requestId` dedup within and across a restart, graceful reopen with stable root identity, tool `replay` behavior across an ungraceful SIGKILL (safe reruns, unsafe is not rerun and is reported interrupted), continuation after that crash, and the fact that a changed payload under a reused `requestId` is **not** refused by Durable.
+Not verified: cancellation and cleanup scope, observation/reconnect, SQLite durability settings; and no prototype code or Durable integration test has been written or run.
