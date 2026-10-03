@@ -87,13 +87,27 @@ Lab: `/home/andy/dev/pi-durable-lab` (throwaway, not committed to the experiment
 
 **Consequence:** the architecture's requirement to "acquire a store-owner lock before opening the harness; a second owner must refuse startup" is the adapter's responsibility. The default SQLite storage does not provide it, so P1A must implement the lock itself and a test must prove the second owner is refused.
 
+### Faux-model experiments (2026-10-03)
+
+Run with Pi's faux provider (`fauxProvider` + `fauxAssistantMessage`), so no real model or credentials were involved. Scripts in the lab: `exp-dedup.mjs`, `exp-reopen.mjs`.
+
+| Check | Result |
+| --- | --- |
+| Same `requestId`, same payload, same process | returns the same submission (`dedup_same_id: true`) |
+| Submission settles against the faux model | `settled_status: done` |
+| Same `requestId`, **different** payload | **ALLOWED, not refused**: returns the original submission and ignores the new content (`id_equals_original=true`) |
+| Reopen the SQLite store, `harness.resume()` | ok; `resume` is callable |
+| Root conversation identity across restart | stable |
+| `requestId` dedup across restart | returns the original submission |
+
+**Consequence for R5:** Durable's `requestId` dedup does **not** refuse a changed payload under the same ID — it silently returns the original. The adapter must store and compare a payload/configuration digest and refuse a mismatch itself.
+
 Still open (each needs a small deterministic experiment against the pinned revision):
 
-- `requestId` submission dedup: repeat returns the original, changed payload under the same ID is refused;
 - tool `replay` declarations: interrupted-safe rerun vs interrupted-unsafe report;
 - cancellation scope for foreground and background ownership, including process-group termination;
 - observation/reconnect/cursor/snapshot APIs and event durability;
-- store reopen after an ungraceful crash and `harness.resume()` continuation;
+- store reopen after an **ungraceful** process kill mid-run, then `resume()` continuation (the reopen above was a graceful close);
 - SQLite durability settings and the supported JavaScript runtime range.
 
 ## Baseline test capture
@@ -103,12 +117,12 @@ Still open (each needs a small deterministic experiment against the pinned revis
 ## Open P0 items
 
 1. Pin the upstream source commit inside `github.com/earendil-works/pi` (npm versions are pinned; the git commit is not).
-2. Finish the deterministic Durable experiments: `requestId` dedup/conflict, tool `replay`, cancellation scope, observation/reconnect, crash reopen + `resume()`, SQLite durability settings.
+2. Finish the deterministic Durable experiments: tool `replay`, cancellation scope, observation/reconnect, ungraceful-crash reopen + `resume()`, SQLite durability settings. (`requestId` dedup is verified; the changed-payload conflict must be enforced by the adapter.)
 3. Record full-suite (`--all`) baseline results in `development.md` (lint verified in changed-file mode; the two named tests pass).
 4. Confirm the P1C configuration syntax against `docs/configuration.md` conventions.
 5. Decide which of R4/R5/R9/R10 need adapter-owned contracts versus upstream guarantees, and implement the adapter store-owner lock that the default SQLite storage does not provide.
 
 ## Honest status
 
-Verified: entry-point existence and roles; the existing outcome/lease/prompt/dispatch contracts; toolchain pins; the two named supervision-branch tests pass; the Pi Durable library API surface, offline `Harness.open` + root creation, `resume` presence, and the absence of a default exclusive store lock.
-Not verified: `requestId` dedup/conflict, tool replay, cancellation and cleanup, observation/reconnect, crash-reopen continuation, SQLite durability settings; and no prototype code or Durable integration test has been written or run.
+Verified: entry-point existence and roles; the existing outcome/lease/prompt/dispatch contracts; toolchain pins; the two named supervision-branch tests pass; the Pi Durable library API surface, offline `Harness.open` + root creation, `resume` presence, the absence of a default exclusive store lock, `requestId` dedup within and across a restart, graceful reopen with stable root identity, and the fact that a changed payload under a reused `requestId` is **not** refused by Durable.
+Not verified: tool `replay`, cancellation and cleanup, observation/reconnect, continuation after an ungraceful kill, SQLite durability settings; and no prototype code or Durable integration test has been written or run.
