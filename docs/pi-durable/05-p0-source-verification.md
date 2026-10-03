@@ -14,9 +14,11 @@ It makes no claim of prototype implementation or of executed Durable integration
 | Experiment head at P0 start | `a40b9e375330773e61fcf19bdb894e31ed96d3eb` (design docs only) |
 | `pi` | 1.0.0 |
 | `@earendil-works/pi-coding-agent` | 1.0.0 |
+| `@earendil-works/pi-durable` | 1.0.1 (repository `github.com/earendil-works/pi`) |
+| `@earendil-works/pi-ai` / `@earendil-works/chord` | 1.0.1 / 1.0.1 |
 | ShellCheck / actionlint | 0.11.0 / 1.7.12 |
 
-Pi Durable upstream source (`github.com/earendil-works/pi`) and the design post (`earendil.com/posts/pi-durable/`) are **not yet pinned**; see "Pi Durable capability checks".
+The upstream source commit inside `github.com/earendil-works/pi` is **not yet pinned**; the npm package version is pinned (see "Pi Durable API mapping").
 
 ## Entry-point verification
 
@@ -56,21 +58,43 @@ The prototype must preserve these existing mechanisms; each row names the curren
 | R11 acknowledgements keep sequence/owner checks | `bin/fm-branch-outcome.sh` processed marker; watcher-continuity per-actor ack |
 | R12 recovery fenced before resume | session-lock/generation checks in the extension (submission-time); mutation-boundary fencing is proposed |
 
-## Pi Durable capability checks
+## Pi Durable API mapping (verified)
 
-**Top finding (potential blocker):** the installed `pi` 1.0.0 CLI exposes no `durable` command or documented Durable surface (`pi --help` and `pi durable --help` show none).
-The Durable API named by the design (persistent execution, submission deduplication, tool replay declarations, one owner per store) must be located and pinned in the upstream Pi source before P1 can be specified.
+**Correction to the first pass:** Pi Durable is not a `pi` subcommand. It is a separate npm library, `@earendil-works/pi-durable` (1.0.1), that a sidecar program imports. This matches the architecture's "local TypeScript sidecar"; the earlier "the installed `pi` CLI exposes no Durable surface" was expected, not a blocker.
 
-Still open (from `03-implementation-plan.md` P0), each needing a small deterministic experiment against the pinned revision:
+Confirmed imports (published design post and the probe below):
 
-- persistent store reopen and exclusive single-owner lock;
-- conversation find/create and the create/find mapping across a crash;
-- submission request-ID retry and conflicting-payload behaviour;
-- tool configuration persistence across restart;
-- interrupt/recovery semantics;
-- cancellation of foreground and background ownership (process-group termination);
-- observation/reconnect/cursor/snapshot APIs;
-- SQLite durability settings and supported JS runtime.
+- `@earendil-works/pi-durable` - `Harness`, `createRegistry`, `defineTool`, `defineExtension`, `defineTask`, `defineDoc`, `hook`, `section`, `wrapTool`, plus entry/doc/task types and `StorageRejected` / `ConversationBusy`.
+- `@earendil-works/pi-durable/storage/sqlite/node` - `openNodeSqliteStorage`; also `/storage/jsonl` and `/storage/memory`.
+- `@earendil-works/pi-durable/env/node` - `NodeExecutionEnv`.
+- `@earendil-works/pi-durable/tools` - coding tools; `/testing` - test helpers.
+- `@earendil-works/chord/context` - `BACKGROUND_CONTEXT` (the cancellation context every call takes).
+- `@earendil-works/pi-ai` - `createModels` and provider/model types.
+
+Call shape: `Harness.open(storage, { models, registry, env }, context)`; `harness.resume()`; `await harness.root(context, { agent: { model, cwd } })`; `conversation.submit({ type: "input", content, requestId }, context)`; `harness.close(context)` (close requires the context).
+
+### Deterministic probe results (2026-10-03)
+
+Lab: `/home/andy/dev/pi-durable-lab` (throwaway, not committed to the experiment branch).
+
+| Check | Result |
+| --- | --- |
+| Install `pi-durable` + `pi-ai` + `chord` 1.0.1 | ok |
+| SQLite storage open (`openNodeSqliteStorage`) | ok, with Node `ExperimentalWarning: SQLite is an experimental feature` |
+| `Harness.open` + `harness.root(...)` with no model call | ok, fully offline |
+| `harness.resume` present | yes (function) |
+| Cross-process exclusive store ownership | **NOT enforced by default**: a second process opened the same SQLite store concurrently and succeeded |
+
+**Consequence:** the architecture's requirement to "acquire a store-owner lock before opening the harness; a second owner must refuse startup" is the adapter's responsibility. The default SQLite storage does not provide it, so P1A must implement the lock itself and a test must prove the second owner is refused.
+
+Still open (each needs a small deterministic experiment against the pinned revision):
+
+- `requestId` submission dedup: repeat returns the original, changed payload under the same ID is refused;
+- tool `replay` declarations: interrupted-safe rerun vs interrupted-unsafe report;
+- cancellation scope for foreground and background ownership, including process-group termination;
+- observation/reconnect/cursor/snapshot APIs and event durability;
+- store reopen after an ungraceful crash and `harness.resume()` continuation;
+- SQLite durability settings and the supported JavaScript runtime range.
 
 ## Baseline test capture
 
@@ -78,13 +102,13 @@ Still open (from `03-implementation-plan.md` P0), each needing a small determini
 
 ## Open P0 items
 
-1. Pin the upstream Pi Durable source revision (and confirm the installed `pi` exposes the required API; escalate if not).
-2. Run the deterministic Durable capability experiments listed above.
-3. Record full-suite (`--all`) and lint baseline results in `development.md`.
+1. Pin the upstream source commit inside `github.com/earendil-works/pi` (npm versions are pinned; the git commit is not).
+2. Finish the deterministic Durable experiments: `requestId` dedup/conflict, tool `replay`, cancellation scope, observation/reconnect, crash reopen + `resume()`, SQLite durability settings.
+3. Record full-suite (`--all`) baseline results in `development.md` (lint verified in changed-file mode; the two named tests pass).
 4. Confirm the P1C configuration syntax against `docs/configuration.md` conventions.
-5. Decide which of R4/R5/R9/R10 need adapter-owned contracts versus upstream guarantees.
+5. Decide which of R4/R5/R9/R10 need adapter-owned contracts versus upstream guarantees, and implement the adapter store-owner lock that the default SQLite storage does not provide.
 
 ## Honest status
 
-Verified: entry-point existence and roles, the existing outcome/lease/prompt/dispatch contracts, toolchain pins, and the two named supervision-branch tests.
-Not verified: any Pi Durable API, any prototype code, and any executed Durable integration test.
+Verified: entry-point existence and roles; the existing outcome/lease/prompt/dispatch contracts; toolchain pins; the two named supervision-branch tests pass; the Pi Durable library API surface, offline `Harness.open` + root creation, `resume` presence, and the absence of a default exclusive store lock.
+Not verified: `requestId` dedup/conflict, tool replay, cancellation and cleanup, observation/reconnect, crash-reopen continuation, SQLite durability settings; and no prototype code or Durable integration test has been written or run.

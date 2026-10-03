@@ -30,6 +30,8 @@ git -C <dir> checkout -B experiment/pi-durable-supervision origin/experiment/pi-
 | Node | v22.21.1 (nvm) | runs the Pi extensions |
 | `pi` | 1.0.0 | installed at `/home/andy/.nvm/versions/node/v22.21.1/bin/pi` |
 | `@earendil-works/pi-coding-agent` | 1.0.0 | global npm install |
+| `@earendil-works/pi-durable` | 1.0.1 | the Durable runtime library (not a `pi` subcommand) |
+| `@earendil-works/pi-ai` / `@earendil-works/chord` | 1.0.1 / 1.0.1 | Durable dependencies |
 | ShellCheck | 0.11.0 | `bin/fm-lint.sh --required-version`; installed at `~/.local/bin/shellcheck` |
 | actionlint | 1.7.12 | `bin/fm-lint-workflows.sh --required-version`; installed at `~/.local/bin/actionlint` |
 
@@ -63,4 +65,20 @@ bin/fm-test-run.sh tests/fm-branch-supervision.test.sh tests/fm-pi-branch-extens
 ```
 
 Result: `FM_TEST_SUMMARY total=2 failed=0`, ~94 s wall (2026-10-03T23:16Z). Both subjects passed.
-Full-suite (`--all`) and lint baselines are open P0 items; see `05-p0-source-verification.md`.
+
+Lint:
+
+```sh
+bin/fm-lint.sh
+```
+
+Result: passes in changed-file mode (ShellCheck 0.11.0, actionlint 1.7.12; 3 workflow files valid). Full-suite (`--all`) capture is an open P0 item.
+
+Durable probe lab (throwaway, outside this repo):
+
+```sh
+mkdir -p ~/dev/pi-durable-lab && cd ~/dev/pi-durable-lab
+npm init -y && npm install @earendil-works/pi-durable@1.0.1 @earendil-works/pi-ai@1.0.1 @earendil-works/chord@1.0.1
+```
+
+See `05-p0-source-verification.md` for the probe results.
