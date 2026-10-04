@@ -9,6 +9,8 @@
 import { connect } from "node:net";
 import {
   PROTOCOL_VERSION,
+  type CancelResult,
+  type CancelScope,
   type DispatchResult,
   type SidecarRequest,
   type SidecarResponse,
@@ -118,5 +120,19 @@ export class SidecarClient implements DispatchTransport {
     if (!response.ok) {
       throw new Error(`sidecar refused the outcome receipt: ${response.error.code}`);
     }
+  }
+
+  /** Persist cancellation intent and request runtime abort for one operation. */
+  async cancel(operationId: string, scope: CancelScope = "operation"): Promise<CancelResult> {
+    const response = await sidecarRequest(this.options.socketPath, {
+      ...this.authority(),
+      op: "cancel",
+      operationId,
+      scope,
+    });
+    if (!response.ok) {
+      throw new Error(`sidecar refused cancellation: ${response.error.code}`);
+    }
+    return response.result as CancelResult;
   }
 }

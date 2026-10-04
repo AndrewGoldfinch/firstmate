@@ -10,7 +10,8 @@
 
 import { createRequire } from "node:module";
 import { createModels, type MutableModels } from "@earendil-works/pi-ai";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
+import type { Context } from "@earendil-works/chord";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { JsonValue, PinnedAgent } from "./protocol.ts";
@@ -54,6 +55,11 @@ export type EnsureConversationResult = {
 export type RunSupervisionInput = {
   conversationId: string;
   prompt: string;
+  /**
+   * Durable operation identity. When present the run is registered so a
+   * cancellation request can abort exactly this execution.
+   */
+  operationId?: string;
 };
 
 type EntryRecordLike = {
@@ -80,6 +86,8 @@ export class DurableProvider {
   private readonly configureModels?: (models: MutableModels) => void;
   private harness: Harness | null = null;
   private opening: Promise<Harness> | null = null;
+  /** Cancel handles for the operations this process is executing. */
+  private readonly running = new Map<string, (reason?: unknown) => void>();
 
   constructor(options: DurableProviderOptions) {
     this.storePath = options.storePath;
@@ -164,18 +172,55 @@ export class DurableProvider {
    */
   async runSupervision(input: RunSupervisionInput): Promise<JsonValue> {
     const harness = await this.openHarness();
+    const cancellation = input.operationId === undefined ? null : withCancel(BACKGROUND_CONTEXT);
+    if (input.operationId !== undefined && cancellation) {
+      this.running.set(input.operationId, cancellation.cancel);
+    }
+    try {
+      return await this.runOnConversation(
+        harness,
+        input,
+        cancellation?.context ?? BACKGROUND_CONTEXT,
+      );
+    } finally {
+      if (input.operationId !== undefined) this.running.delete(input.operationId);
+    }
+  }
+
+  /**
+   * Request runtime abort for one operation's ownership tree. Returns false
+   * when nothing of that identity is executing here, which is a fact the
+   * caller must record rather than treat as settled cancellation.
+   */
+  abort(operationId: string): boolean {
+    const cancel = this.running.get(operationId);
+    if (!cancel) return false;
+    cancel(new Error(`operation ${operationId} was cancelled`));
+    return true;
+  }
+
+  /** Operation identities this process is still executing. */
+  activeOperations(): string[] {
+    return [...this.running.keys()];
+  }
+
+  private async runOnConversation(
+    harness: Harness,
+    input: RunSupervisionInput,
+    context: Context,
+  ): Promise<JsonValue> {
     const conversation: Conversation | undefined = await harness.conversation(
       input.conversationId as never,
-      BACKGROUND_CONTEXT,
+      context,
     );
     if (!conversation) {
       throw new Error(`supervision conversation ${input.conversationId} was not found`);
     }
     const submission = await conversation.submit(
       { type: "input", content: input.prompt },
-      BACKGROUND_CONTEXT,
+      context,
     );
-    const settled = await submission.wait(BACKGROUND_CONTEXT);
+    const settled = await submission.wait(context);
     if (settled.status !== "done" || settled.type !== "input") {
       const reason = (settled as { reason?: string }).reason;
       throw new Error(`supervision submission did not settle done (${settled.status}${reason ? `: ${reason}` : ""})`);

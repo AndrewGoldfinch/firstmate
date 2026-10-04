@@ -32,6 +32,8 @@ import {
   parseRequest,
   pinnedConfigDigest,
   type AuthorityBinding,
+  type CancelRequest,
+  type CancelResult,
   type DispatchRequest,
   type EnsureSupervisorRequest,
   type HealthResult,
@@ -47,6 +49,11 @@ import {
   type SubmitResult,
   type SupervisorBinding,
 } from "./protocol.ts";
+
+/** How long cancellation waits for one ownership tree to stop running. */
+const CANCEL_DEADLINE_MS = 2000;
+/** Cancellation idle-poll interval. */
+const CANCEL_POLL_MS = 10;
 
 export type SidecarOptions = {
   /** Canonical FM_HOME for this owner. Created when absent. */
@@ -288,6 +295,8 @@ export class DurableSidecar {
         return this.observeAck(request);
       case "resume":
         return this.resume(request);
+      case "cancel":
+        return this.cancel(request);
       case "shutdown": {
         setImmediate(() => {
           void this.stop();
@@ -424,6 +433,70 @@ export class DurableSidecar {
   }
 
   /**
+   * Cancellation: persist intent, request runtime abort, then verify the
+   * ownership tree and every owned effect before reporting anything settled.
+   * Abort is not rollback, so an effect that may already exist keeps the
+   * operation unresolved and escalates instead of claiming completion.
+   */
+  private async cancel(request: CancelRequest): Promise<CancelResult> {
+    this.authorize(request);
+    const existing = this.store.getOperation(request.operationId);
+    if (!existing) {
+      throw new ProtocolError("NOT_FOUND", "unknown operation");
+    }
+
+    // Intent first: the `cancelling` state is durable before any abort request.
+    this.store.requestCancel(request.operationId, this.now());
+    this.recordObservation("cancellation-intent", request.operationId, {
+      scope: request.scope,
+      state: "cancelling",
+    });
+
+    const aborted = this.provider.abort(request.operationId);
+    this.recordObservation("cancellation-abort", request.operationId, { aborted });
+
+    const idle = await this.waitForIdle(request.operationId, CANCEL_DEADLINE_MS);
+    const unresolved: string[] = [];
+    if (!idle) unresolved.push("ownership-tree-active");
+    // The pre-cancel snapshot carries the state cancellation just overwrote;
+    // the fresh read carries any receipt recorded while the abort unwound.
+    const current = this.store.getOperation(request.operationId) ?? existing;
+    if (existing.state === "settled" && current.receipt === null) {
+      unresolved.push("outcome-effect-unresolved");
+    }
+
+    const state = unresolved.length === 0 ? "cancelled" : "cancel-unresolved";
+    this.store.settleCancellation(request.operationId, state, this.now());
+    this.recordObservation("cancellation-settled", request.operationId, { state, unresolved });
+
+    // Nothing is released here: the operation record, its observations, and any
+    // outcome row stay for FirstMate to release or archive.
+    return {
+      operationId: request.operationId,
+      scope: request.scope,
+      intentPersisted: true,
+      settled: unresolved.length === 0,
+      state,
+      unresolved,
+      retained: {
+        operation: true,
+        observations: this.store.countObservations(this.homeId),
+        outcomesUntouched: true,
+      },
+    };
+  }
+
+  /** Wait, bounded, until this operation's ownership tree stops running. */
+  private async waitForIdle(operationId: string, deadlineMs: number): Promise<boolean> {
+    const deadline = this.now() + deadlineMs;
+    while (this.provider.activeOperations().includes(operationId)) {
+      if (this.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, CANCEL_POLL_MS));
+    }
+    return true;
+  }
+
+  /**
    * Execute one accepted supervision operation under current authority and
    * return its candidate result. A settled repeat returns the original result;
    * an accepted-but-unsettled repeat requires reconciliation.
@@ -480,12 +553,21 @@ export class DurableSidecar {
       result = await this.provider.runSupervision({
         conversationId: binding.conversationId,
         prompt: request.prompt,
+        operationId: request.operationId,
       });
     } catch (error) {
       // Accepted but unresolved: the effect may have happened, so it must be
-      // reconciled rather than blindly retried.
+      // reconciled rather than blindly retried. A run stopped by a recorded
+      // cancellation is not an unresolved effect, so it is not reported as one.
       const message = error instanceof Error ? error.message : String(error);
-      this.recordObservation("unresolved", request.operationId, { state: "accepted", error: message });
+      const cancelState = this.store.getOperation(request.operationId)?.state;
+      if (
+        cancelState !== "cancelling" &&
+        cancelState !== "cancelled" &&
+        cancelState !== "cancel-unresolved"
+      ) {
+        this.recordObservation("unresolved", request.operationId, { state: "accepted", error: message });
+      }
       throw error;
     }
     await this.barrier("dispatch.model.after");

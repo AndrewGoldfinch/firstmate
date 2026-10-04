@@ -54,6 +54,7 @@ export type OperationName =
   | "observe"
   | "observeAck"
   | "resume"
+  | "cancel"
   | "shutdown";
 
 export const OPERATION_NAMES: readonly OperationName[] = [
@@ -66,6 +67,7 @@ export const OPERATION_NAMES: readonly OperationName[] = [
   "observe",
   "observeAck",
   "resume",
+  "cancel",
   "shutdown",
 ];
 
@@ -118,6 +120,7 @@ export type ErrorCode =
   | "AUTHORITY_STALE"
   | "AUTHORITY_CONFLICT"
   | "AUTHORITY_SCOPE"
+  | "SCOPE_UNSUPPORTED"
   | "INTERNAL";
 
 /** A refusal that maps to a protocol error code. */
@@ -229,6 +232,36 @@ export type ResumeRequest = BaseRequest &
 
 export type ShutdownRequest = BaseRequest & { op: "shutdown" };
 
+/**
+ * The cancellation scope a request covers. `background` is deliberately absent:
+ * the prototype prohibits untracked background work, so there is no background
+ * ownership tree to cancel. `operation` and `foreground` both cover the single
+ * owned foreground operation, which is the whole ownership tree here.
+ */
+export const CANCEL_SCOPES = ["operation", "foreground"] as const;
+export type CancelScope = (typeof CANCEL_SCOPES)[number];
+
+/** Persist cancellation intent for one operation, then request runtime abort. */
+export type CancelRequest = BaseRequest &
+  AuthorityBinding & {
+    op: "cancel";
+    supervisorId: string;
+    capabilityProfile: string;
+    operationId: string;
+    scope: CancelScope;
+  };
+
+export type CancelResult = {
+  operationId: string;
+  scope: CancelScope;
+  intentPersisted: true;
+  /** False whenever any owned effect is still unresolved at the deadline. */
+  settled: boolean;
+  state: "cancelled" | "cancel-unresolved";
+  unresolved: string[];
+  retained: { operation: true; observations: number; outcomesUntouched: true };
+};
+
 export type SidecarRequest =
   | HealthRequest
   | EnsureSupervisorRequest
@@ -239,13 +272,14 @@ export type SidecarRequest =
   | ObserveRequest
   | ObserveAckRequest
   | ResumeRequest
+  | CancelRequest
   | ShutdownRequest;
 
 export type OperationRecord = {
   operationId: string;
   homeId: string;
   supervisorId: string;
-  state: "accepted" | "settled";
+  state: "accepted" | "settled" | "cancelling" | "cancelled" | "cancel-unresolved";
   payloadDigest: string;
   configDigest: string;
   rowIds: string[];
@@ -328,6 +362,7 @@ export type SidecarResult =
   | ObserveResult
   | ObserveAckResult
   | ResumeResult
+  | CancelResult
   | { stopped: true };
 
 export type SidecarResponse =
@@ -544,6 +579,21 @@ export function parseRequest(raw: unknown): SidecarRequest {
         supervisorId: asString(source, "supervisorId"),
         capabilityProfile: parseCapabilityProfile(source),
       };
+    case "cancel": {
+      const scope = source.scope;
+      if (typeof scope !== "string" || !(CANCEL_SCOPES as readonly string[]).includes(scope)) {
+        fail("SCOPE_UNSUPPORTED", `unsupported cancellation scope ${JSON.stringify(scope)}`);
+      }
+      return {
+        ...base,
+        ...parseAuthority(source),
+        op: "cancel",
+        supervisorId: asString(source, "supervisorId"),
+        capabilityProfile: parseCapabilityProfile(source),
+        operationId: asString(source, "operationId"),
+        scope: scope as CancelScope,
+      };
+    }
     case "shutdown":
       return { ...base, op: "shutdown" };
     case "submit": {

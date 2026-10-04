@@ -115,3 +115,118 @@ test("shutdown stops the service and releases the socket", async () => {
   const restarted = await start(home);
   assert.equal(restarted.homeId, sidecar.homeId);
 });
+
+test("cancellation persists intent before abort and retains the records", async () => {
+  const home = tempHome();
+  const sidecar = await start(home);
+  const ensured = await call(
+    sidecar.socketPath,
+    ensureSupervisorRequest({ homeId: sidecar.homeId, cwd: home }),
+  );
+  assert.equal(ensured.ok, true);
+  const conversationId = ensured.ok
+    ? (ensured.result as { conversationId: string }).conversationId
+    : "";
+
+  const authority = {
+    protocolVersion: PROTOCOL_VERSION,
+    homeId: sidecar.homeId,
+    supervisorId: "pi-supervisor",
+    capabilityProfile: "supervision-observe-v1",
+    ownerGeneration: 1,
+    wakeClaimId: "claim-1",
+    rowIds: [],
+  };
+
+  const submitted = await call(sidecar.socketPath, {
+    protocolVersion: PROTOCOL_VERSION,
+    homeId: sidecar.homeId,
+    op: "submit",
+    operationId: "op-cancel",
+    supervisorId: "pi-supervisor",
+    payload: { task: "T1" },
+    config: { conversationId },
+  });
+  assert.equal(submitted.ok, true);
+
+  const missing = await call(sidecar.socketPath, {
+    ...authority,
+    op: "cancel",
+    operationId: "op-other",
+    scope: "operation",
+  });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.ok ? "" : missing.error.code, "NOT_FOUND");
+
+  const background = await call(sidecar.socketPath, {
+    ...authority,
+    op: "cancel",
+    operationId: "op-cancel",
+    scope: "background",
+  });
+  assert.equal(background.ok, false);
+  assert.equal(background.ok ? "" : background.error.code, "SCOPE_UNSUPPORTED");
+
+  const cancelled = await call(sidecar.socketPath, {
+    ...authority,
+    op: "cancel",
+    operationId: "op-cancel",
+    scope: "operation",
+  });
+  assert.equal(cancelled.ok, true);
+  const result = cancelled.ok
+    ? (cancelled.result as {
+        settled: boolean;
+        state: string;
+        intentPersisted: boolean;
+        unresolved: string[];
+        retained: { operation: boolean; outcomesUntouched: boolean };
+      })
+    : null;
+  assert.equal(result?.intentPersisted, true);
+  assert.equal(result?.settled, true);
+  assert.equal(result?.state, "cancelled");
+  assert.deepEqual(result?.unresolved, []);
+  assert.equal(result?.retained.operation, true);
+  assert.equal(result?.retained.outcomesUntouched, true);
+  assert.ok((result?.retained.observations ?? 0) >= 3, "cancellation observations must be retained");
+
+  const observed = await call(sidecar.socketPath, {
+    protocolVersion: PROTOCOL_VERSION,
+    homeId: sidecar.homeId,
+    op: "observe",
+    after: 0,
+    limit: 64,
+  });
+  const kinds = observed.ok
+    ? (observed.result as { observations: { kind: string; operationId: string | null }[] })
+        .observations.filter((observation) => observation.operationId === "op-cancel")
+        .map((observation) => observation.kind)
+    : [];
+  const intentIndex = kinds.indexOf("cancellation-intent");
+  const abortIndex = kinds.indexOf("cancellation-abort");
+  assert.ok(intentIndex >= 0, "cancellation intent must be recorded");
+  assert.ok(abortIndex > intentIndex, "intent must be durable before the abort request");
+  assert.ok(kinds.includes("cancellation-settled"), "the verified outcome must be recorded");
+
+  const inspected = await call(sidecar.socketPath, {
+    protocolVersion: PROTOCOL_VERSION,
+    homeId: sidecar.homeId,
+    op: "inspect",
+    operationId: "op-cancel",
+  });
+  const record = inspected.ok
+    ? (inspected.result as { record: { state: string } | null }).record
+    : null;
+  assert.equal(record?.state, "cancelled");
+
+  const redispatch = await call(sidecar.socketPath, {
+    ...authority,
+    op: "dispatch",
+    operationId: "op-cancel",
+    prompt: "p",
+    payload: { task: "T1" },
+  });
+  assert.equal(redispatch.ok, false);
+  assert.equal(redispatch.ok ? "" : redispatch.error.code, "RECONCILE_REQUIRED");
+});

@@ -39,9 +39,14 @@ function caseHome(context: CaseContext, id: string): string {
   return home;
 }
 
-async function startSidecar(home: string, crashAt?: string) {
+async function startSidecar(
+  home: string,
+  crashAt?: string,
+  onFaux?: (faux: ReturnType<typeof fauxProvider>) => void,
+) {
   const faux = fauxProvider();
   const model = faux.models[0]!;
+  onFaux?.(faux);
   let armed = crashAt !== undefined;
   const sidecar = await DurableSidecar.start({
     home,
@@ -84,7 +89,16 @@ async function dispatch(
   sinkOverride?: OutcomeSink,
 ) {
   faux.setResponses([fauxAssistantMessage(JSON.stringify(result))]);
-  const transport = new SidecarClient({
+  const transport = clientFor(sidecar);
+  const sink =
+    sinkOverride ??
+    createOutcomeSink({ scriptPath: outcomeScript, env: { ...process.env, FM_HOME: home } });
+  return runDurableDispatch({ transport, sink }, { operationId, prompt: "p", payload: { task: "T1" } });
+}
+
+/** The standard supervision client for one sidecar. */
+function clientFor(sidecar: DurableSidecar): SidecarClient {
+  return new SidecarClient({
     socketPath: sidecar.socketPath,
     homeId: sidecar.homeId,
     supervisorId: "pi-supervisor",
@@ -93,10 +107,25 @@ async function dispatch(
     wakeClaimId: "claim-1",
     rowIds: ["row-T1"],
   });
-  const sink =
-    sinkOverride ??
-    createOutcomeSink({ scriptPath: outcomeScript, env: { ...process.env, FM_HOME: home } });
-  return runDurableDispatch({ transport, sink }, { operationId, prompt: "p", payload: { task: "T1" } });
+}
+
+/** Observation kinds recorded for one operation, in durable sequence order. */
+async function observationKinds(sidecar: DurableSidecar, operationId: string): Promise<string[]> {
+  const { sidecarRequest } = await import("../src/sidecar-client.ts");
+  const response = await sidecarRequest(sidecar.socketPath, {
+    protocolVersion: 2,
+    homeId: sidecar.homeId,
+    op: "observe",
+    after: 0,
+    limit: 256,
+  } as never);
+  if (!response.ok) return [];
+  const result = response.result as {
+    observations: { kind: string; operationId: string | null }[];
+  };
+  return result.observations
+    .filter((observation) => observation.operationId === operationId)
+    .map((observation) => observation.kind);
 }
 
 async function inspect(sidecar: DurableSidecar, operationId: string) {
@@ -377,6 +406,97 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
     });
   }
 
+  // F12 - cancellation during tool execution: intent is durable before the
+  // abort request, a cancelled run commits no outcome, and an operation whose
+  // outcome effect may already exist is never reported settled.
+  {
+    const home = caseHome(context, "F12");
+    let entered!: () => void;
+    const enteredPromise = new Promise<void>((resolve) => (entered = resolve));
+    let release!: () => void;
+    const releasePromise = new Promise<void>((resolve) => (release = resolve));
+    const { sidecar, faux, model } = await startSidecar(home, undefined, (fauxHandle) => {
+      fauxHandle.setResponses([
+        async () => {
+          entered();
+          await releasePromise;
+          return fauxAssistantMessage(JSON.stringify(RESULT));
+        },
+      ]);
+    });
+    await ensure(sidecar, model);
+    const inFlight = runDurableDispatch(
+      {
+        transport: clientFor(sidecar),
+        sink: createOutcomeSink({
+          scriptPath: context.outcomeScript,
+          env: { ...process.env, FM_HOME: home },
+        }),
+      },
+      { operationId: "op-F12", prompt: "p", payload: { task: "T1" } },
+    ).then(
+      () => "settled",
+      (error) => (error as { code?: string }).code ?? "error",
+    );
+    await enteredPromise;
+    const duringRun = await clientFor(sidecar).cancel("op-F12", "foreground");
+    release();
+    const runOutcome = await inFlight;
+    const kinds = await observationKinds(sidecar, "op-F12");
+    const outcomes = await readOutcomes(context.outcomeScript, home);
+    const record = await inspect(sidecar, "op-F12");
+    await sidecar.stop();
+
+    const intentBeforeAbort =
+      kinds.indexOf("cancellation-intent") >= 0 &&
+      kinds.indexOf("cancellation-intent") < kinds.indexOf("cancellation-abort");
+    const cancelledRecord = record.ok
+      ? (record.result as { record: { state: string } | null }).record
+      : null;
+    const cancelled =
+      duringRun.intentPersisted === true &&
+      duringRun.settled === true &&
+      duringRun.state === "cancelled" &&
+      duringRun.unresolved.length === 0 &&
+      intentBeforeAbort &&
+      runOutcome !== "settled" &&
+      outcomes.length === 0 &&
+      cancelledRecord?.state === "cancelled";
+
+    const settledHome = caseHome(context, "F12-settled");
+    const settledSidecar = await startSidecar(settledHome, "dispatch.settle.after");
+    await ensure(settledSidecar.sidecar, settledSidecar.model);
+    try {
+      await dispatch(
+        settledSidecar.sidecar,
+        settledHome,
+        settledSidecar.faux,
+        "op-F12b",
+        context.outcomeScript,
+      );
+    } catch {
+      /* settled, with no outcome commit yet */
+    }
+    const settledCancel = await clientFor(settledSidecar.sidecar).cancel("op-F12b", "operation");
+    const settledRecord = await inspect(settledSidecar.sidecar, "op-F12b");
+    await settledSidecar.sidecar.stop();
+    const unresolvedRecord = settledRecord.ok
+      ? (settledRecord.result as { record: { state: string } | null }).record
+      : null;
+    const neverSettled =
+      settledCancel.settled === false &&
+      settledCancel.state === "cancel-unresolved" &&
+      settledCancel.unresolved.includes("outcome-effect-unresolved") &&
+      unresolvedRecord?.state === "cancel-unresolved";
+
+    results.push({
+      id: "F12",
+      title: "cancellation during tool execution",
+      status: cancelled && neverSettled ? "pass" : "fail",
+      detail: `intentBeforeAbort=${intentBeforeAbort} settledCancel=${duringRun.settled} state=${duringRun.state} runOutcome=${runOutcome} outcomes=${outcomes.length} retainedState=${cancelledRecord?.state ?? "absent"} unresolvedEffect=${settledCancel.unresolved.join("+") || "none"} unresolvedState=${unresolvedRecord?.state ?? "absent"}`,
+    });
+  }
+
   // F13 - second owner refused.
   {
     const home = caseHome(context, "F13");
@@ -478,7 +598,6 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
     ["F05", "during a declared safe read", "the prototype has no read-tool boundary to rerun"],
     ["F09", "after delivery, before acknowledgement", "the existing routine-note delivery limitation is documented, not re-tested here"],
     ["F11", "service crash with valid generation", "covered by F02/F04 recovery; a real process crash needs the VM lane"],
-    ["F12", "cancellation during tool execution", "the prototype has no cancellation operation"],
     ["F16", "missing credentials or incompatible dependency", "a real credential provider is unavailable; the unknown-capability refusal is covered by the P1B suite"],
     ["F17", "disposable host reboot", "no VM or reboot boundary exists in this environment"],
   ];

@@ -64,12 +64,23 @@ function toObservation(row: ObservationRow): Observation {
   };
 }
 
+/** Every operation state the store accepts; anything else reads as accepted. */
+const OPERATION_STATES: readonly OperationRecord["state"][] = [
+  "accepted",
+  "settled",
+  "cancelling",
+  "cancelled",
+  "cancel-unresolved",
+];
+
 function toRecord(row: OperationRow): OperationRecord {
   return {
     operationId: row.operation_id,
     homeId: row.home_id,
     supervisorId: row.supervisor_id,
-    state: row.state === "settled" ? "settled" : "accepted",
+    state: OPERATION_STATES.includes(row.state as OperationRecord["state"])
+      ? (row.state as OperationRecord["state"])
+      : "accepted",
     payloadDigest: row.payload_digest,
     configDigest: row.config_digest,
     rowIds: JSON.parse(row.row_ids_json) as string[],
@@ -241,6 +252,28 @@ export class OperationStore {
     this.db
       .prepare("UPDATE operations SET receipt_json = ?, updated_at = ? WHERE operation_id = ?")
       .run(JSON.stringify({ seq }), at, operationId);
+  }
+
+  /**
+   * Persist cancellation intent for an operation before any runtime abort is
+   * requested. The `cancelling` state is itself the durable intent, so a
+   * process that dies mid-cancellation still shows the request.
+   */
+  requestCancel(operationId: string, at: number): void {
+    this.db
+      .prepare("UPDATE operations SET state = 'cancelling', updated_at = ? WHERE operation_id = ?")
+      .run(at, operationId);
+  }
+
+  /** Record the verified cancellation outcome for an operation. */
+  settleCancellation(
+    operationId: string,
+    state: "cancelled" | "cancel-unresolved",
+    at: number,
+  ): void {
+    this.db
+      .prepare("UPDATE operations SET state = ?, updated_at = ? WHERE operation_id = ?")
+      .run(state, at, operationId);
   }
 
   /** Append one durable outbox observation and return its sequence. */
