@@ -127,6 +127,71 @@ test("a settled repeat without a receipt is refused rather than blindly appended
   assert.deepEqual(receipts, []);
 });
 
+function probeSink(probe: OutcomeSink["probe"]): { sink: OutcomeSink; appended: string[] } {
+  const appended: string[] = [];
+  const sink: OutcomeSink = {
+    async append(result) {
+      appended.push(result.summary);
+      return appended.length;
+    },
+    probe,
+  };
+  return { sink, appended };
+}
+
+test("a settled repeat whose outcome is already stored reconciles to that sequence", async () => {
+  const { transport, receipts } = fakeTransport({
+    ok: true,
+    result: { task: "task-1", verdict: "routine", summary: "all clear" },
+    replayed: true,
+    receipt: null,
+  });
+  const { sink, appended } = probeSink(async () => 3);
+  const result = await runDurableDispatch(
+    { transport, sink },
+    { operationId: "op-1", prompt: "p", payload: {} },
+  );
+  assert.deepEqual(result, { seq: 3, replayed: true, reconciled: true });
+  assert.deepEqual(appended, []);
+  assert.deepEqual(receipts, [{ operationId: "op-1", seq: 3 }]);
+});
+
+test("a settled repeat whose outcome is proven absent is appended exactly once", async () => {
+  const { transport, receipts } = fakeTransport({
+    ok: true,
+    result: { task: "task-1", verdict: "routine", summary: "all clear" },
+    replayed: true,
+    receipt: null,
+  });
+  const { sink, appended } = probeSink(async () => null);
+  const result = await runDurableDispatch(
+    { transport, sink },
+    { operationId: "op-1", prompt: "p", payload: {} },
+  );
+  assert.deepEqual(result, { seq: 1, replayed: false, reconciled: true });
+  assert.deepEqual(appended, ["all clear"]);
+  assert.deepEqual(receipts, [{ operationId: "op-1", seq: 1 }]);
+});
+
+test("a read-back that cannot answer keeps the refusal instead of guessing", async () => {
+  const { transport, receipts } = fakeTransport({
+    ok: true,
+    result: { task: "task-1", verdict: "routine", summary: "all clear" },
+    replayed: true,
+    receipt: null,
+  });
+  const { sink, appended } = probeSink(async () => {
+    throw new Error("outcome store unreadable");
+  });
+  await assert.rejects(
+    () => runDurableDispatch({ transport, sink }, { operationId: "op-1", prompt: "p", payload: {} }),
+    (error: unknown) =>
+      error instanceof Error && error.message === "outcome store unreadable",
+  );
+  assert.deepEqual(appended, []);
+  assert.deepEqual(receipts, []);
+});
+
 test("a malformed sidecar result is refused before the outcome is appended", async () => {
   const { transport } = fakeTransport({
     ok: true,

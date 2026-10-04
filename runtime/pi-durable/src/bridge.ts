@@ -77,6 +77,14 @@ export function parseCandidateResult(raw: unknown): CandidateResult {
 /** The existing outcome sink, owner: `bin/fm-branch-outcome.sh`. */
 export type OutcomeSink = {
   append(result: CandidateResult): Promise<number>;
+  /**
+   * Optional durable read-back used to reconcile a settled result whose receipt
+   * was never recorded. Returns the committed sequence when the sink can prove
+   * the result is already stored, or null when it can prove the result is
+   * absent. A sink without this capability cannot be reconciled, so the bridge
+   * keeps refusing a blind append.
+   */
+  probe?(result: CandidateResult): Promise<number | null>;
 };
 
 export type DispatchOutcome =
@@ -102,6 +110,8 @@ export type DurableDispatchInput = {
 export type DurableDispatchResult = {
   seq: number;
   replayed: boolean;
+  /** True when a missing receipt was reconciled through the sink read-back. */
+  reconciled?: boolean;
 };
 
 /**
@@ -109,7 +119,9 @@ export type DurableDispatchResult = {
  * sink.
  *
  * A settled repeat whose receipt was already recorded returns that receipt and
- * appends nothing, so a repeated result cannot commit a conflicting outcome.
+ * appends nothing, so a repeated result cannot commit a conflicting outcome. A
+ * settled repeat with no receipt is reconciled through the sink read-back when
+ * the sink has one, and refused as before when it does not.
  */
 export async function runDurableDispatch(
   deps: { transport: DispatchTransport; sink: OutcomeSink },
@@ -128,11 +140,23 @@ export async function runDurableDispatch(
       return { seq: dispatched.receipt.seq, replayed: true };
     }
     // Settled but no committed receipt: the effect may or may not have been
-    // applied. Refuse a blind append and require reconciliation.
-    throw new BridgeError(
-      "RECONCILE_REQUIRED",
-      "settled result has no committed outcome receipt; reconcile before retrying",
-    );
+    // applied. A sink with a durable read-back reconciles the two stores; a
+    // sink without one must keep refusing a blind append.
+    if (!deps.sink.probe) {
+      throw new BridgeError(
+        "RECONCILE_REQUIRED",
+        "settled result has no committed outcome receipt; reconcile before retrying",
+      );
+    }
+    const candidate = parseCandidateResult(dispatched.result);
+    const committed = await deps.sink.probe(candidate);
+    if (committed !== null) {
+      await deps.transport.recordReceipt(input.operationId, committed);
+      return { seq: committed, replayed: true, reconciled: true };
+    }
+    const seq = await deps.sink.append(candidate);
+    await deps.transport.recordReceipt(input.operationId, seq);
+    return { seq, replayed: false, reconciled: true };
   }
   const candidate = parseCandidateResult(dispatched.result);
   const seq = await deps.sink.append(candidate);

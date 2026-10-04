@@ -14,7 +14,7 @@ import { DurableSidecar } from "../src/service.ts";
 import { runDurableDispatch } from "../src/bridge.ts";
 import { SidecarClient } from "../src/sidecar-client.ts";
 import { createOutcomeSink } from "../src/outcome-sink.ts";
-import type { CandidateResult } from "../src/bridge.ts";
+import type { CandidateResult, OutcomeSink } from "../src/bridge.ts";
 import { SimulatedCrash } from "./runner.ts";
 
 export type MatrixStatus = "pass" | "fail" | "not-covered" | "known-gap";
@@ -81,6 +81,7 @@ async function dispatch(
   operationId: string,
   outcomeScript: string,
   result: CandidateResult = RESULT,
+  sinkOverride?: OutcomeSink,
 ) {
   faux.setResponses([fauxAssistantMessage(JSON.stringify(result))]);
   const transport = new SidecarClient({
@@ -92,7 +93,9 @@ async function dispatch(
     wakeClaimId: "claim-1",
     rowIds: ["row-T1"],
   });
-  const sink = createOutcomeSink({ scriptPath: outcomeScript, env: { ...process.env, FM_HOME: home } });
+  const sink =
+    sinkOverride ??
+    createOutcomeSink({ scriptPath: outcomeScript, env: { ...process.env, FM_HOME: home } });
   return runDurableDispatch({ transport, sink }, { operationId, prompt: "p", payload: { task: "T1" } });
 }
 
@@ -229,7 +232,9 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
     });
   }
 
-  // F06 - after the outcome effect, before the adapter receipt: no blind rerun.
+  // F06 - after the outcome effect, before the adapter receipt: reconcile the
+  // missing receipt through the sink read-back, and keep refusing a blind
+  // append when the sink cannot read back.
   {
     const home = caseHome(context, "F06");
     const { sidecar, faux, model } = await startSidecar(home, "receipt.before");
@@ -239,36 +244,110 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
     } catch {
       /* the receipt barrier crashed after the outcome was appended */
     }
-    let replayCode = "none";
-    try {
-      await dispatch(sidecar, home, faux, "op-F06", context.outcomeScript);
-    } catch (error) {
-      replayCode = (error as { code?: string }).code ?? "error";
-    }
+    const reconciled = await dispatch(sidecar, home, faux, "op-F06", context.outcomeScript);
     const outcomes = await readOutcomes(context.outcomeScript, home);
+
+    const blindHome = caseHome(context, "F06-blind");
+    const blind = await startSidecar(blindHome, "receipt.before");
+    await ensure(blind.sidecar, blind.model);
+    try {
+      await dispatch(blind.sidecar, blindHome, blind.faux, "op-F06b", context.outcomeScript);
+    } catch {
+      /* same boundary, retried below with a sink that cannot read back */
+    }
+    let blindCode = "none";
+    const incapable: OutcomeSink = {
+      async append(): Promise<number> {
+        throw new Error("an incapable sink must never be asked to append");
+      },
+    };
+    try {
+      await dispatch(
+        blind.sidecar,
+        blindHome,
+        blind.faux,
+        "op-F06b",
+        context.outcomeScript,
+        RESULT,
+        incapable,
+      );
+    } catch (error) {
+      blindCode = (error as { code?: string }).code ?? "error";
+    }
+    const blindOutcomes = await readOutcomes(context.outcomeScript, blindHome);
     await sidecar.stop();
+    await blind.sidecar.stop();
     results.push({
       id: "F06",
       title: "after unsafe effect, before receipt commit",
-      status: replayCode === "RECONCILE_REQUIRED" && outcomes.length === 1 ? "pass" : "fail",
-      detail: `replay=${replayCode} outcomes=${outcomes.length}`,
+      status:
+        reconciled.reconciled === true &&
+        reconciled.replayed &&
+        outcomes.length === 1 &&
+        blindCode === "RECONCILE_REQUIRED" &&
+        blindOutcomes.length === 1
+          ? "pass"
+          : "fail",
+      detail: `reconciled=${reconciled.reconciled === true} outcomes=${outcomes.length} incapableSink=${blindCode} incapableOutcomes=${blindOutcomes.length}`,
     });
   }
 
-  // F08 - outcome committed and receipt recorded: a repeat finds the existing outcome.
+  // F07 - after runtime settlement, before the FirstMate outcome commit: the
+  // settled candidate is reconciled through the sink read-back, which proves the
+  // outcome absent and commits it exactly once.
+  {
+    const home = caseHome(context, "F07");
+    const { sidecar, faux, model } = await startSidecar(home, "dispatch.settle.after");
+    await ensure(sidecar, model);
+    try {
+      await dispatch(sidecar, home, faux, "op-F07", context.outcomeScript);
+    } catch {
+      /* settlement recorded; the FirstMate outcome commit never ran */
+    }
+    const before = await readOutcomes(context.outcomeScript, home);
+    const reconciled = await dispatch(sidecar, home, faux, "op-F07", context.outcomeScript);
+    const outcomes = await readOutcomes(context.outcomeScript, home);
+    await sidecar.stop();
+    results.push({
+      id: "F07",
+      title: "after runtime settlement, before FirstMate outcome commit",
+      status:
+        before.length === 0 &&
+        reconciled.reconciled === true &&
+        reconciled.replayed === false &&
+        outcomes.length === 1
+          ? "pass"
+          : "fail",
+      detail: `outcomesBeforeRetry=${before.length} reconciled=${reconciled.reconciled === true} appendedOnce=${outcomes.length === 1} seq=${reconciled.seq}`,
+    });
+  }
+
+  // F08 - after the outcome commit, before the adapter receipt: the retry
+  // completes the receipt, and the following repeat is a clean receipt replay.
   {
     const home = caseHome(context, "F08");
-    const { sidecar, faux, model } = await startSidecar(home);
+    const { sidecar, faux, model } = await startSidecar(home, "receipt.before");
     await ensure(sidecar, model);
-    const first = await dispatch(sidecar, home, faux, "op-F08", context.outcomeScript);
+    try {
+      await dispatch(sidecar, home, faux, "op-F08", context.outcomeScript);
+    } catch {
+      /* outcome committed; the receipt was never recorded */
+    }
+    const reconciled = await dispatch(sidecar, home, faux, "op-F08", context.outcomeScript);
     const replay = await dispatch(sidecar, home, faux, "op-F08", context.outcomeScript);
     const outcomes = await readOutcomes(context.outcomeScript, home);
     await sidecar.stop();
     results.push({
       id: "F08",
       title: "after outcome commit, before adapter receipt",
-      status: replay.replayed && replay.seq === first.seq && outcomes.length === 1 ? "pass" : "fail",
-      detail: `replayed=${replay.replayed} seq=${replay.seq}/${first.seq} outcomes=${outcomes.length}`,
+      status:
+        reconciled.reconciled === true &&
+        replay.replayed &&
+        replay.seq === reconciled.seq &&
+        outcomes.length === 1
+          ? "pass"
+          : "fail",
+      detail: `reconciled=${reconciled.reconciled === true} replaySeq=${replay.seq}/${reconciled.seq} outcomes=${outcomes.length}`,
     });
   }
 
@@ -406,14 +485,6 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
   for (const [id, title, reason] of notCovered) {
     results.push({ id, title, status: "not-covered", detail: reason });
   }
-  results.push({
-    id: "F07",
-    title: "after runtime settlement, before FirstMate outcome commit",
-    status: "known-gap",
-    detail:
-      "the settled candidate is replayable, but the adapter cannot prove the outcome effect is absent, so it refuses a blind append and requires reconciliation",
-  });
-
   return results.sort((a, b) => a.id.localeCompare(b.id));
 }
 
