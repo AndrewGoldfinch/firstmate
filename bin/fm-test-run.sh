@@ -1709,6 +1709,11 @@ families_for_changed_path() {
       families_for_test_reference "$(basename "$path")" \
         || printf '%s\n' "__unmapped__:$path"
       ;;
+    runtime/pi-durable/*)
+      # The P1A sidecar has its own Node suite under runtime/pi-durable/tests;
+      # the repository wrapper runs its typecheck and acceptance tests.
+      printf '%s\n' "__script__:fm-pi-durable-runtime.test.sh"
+      ;;
     bin/*)
       # A deleted script has no consuming suite left to select, the same rule
       # the fixture case above applies. Refusing on its absent mapping would

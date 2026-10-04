@@ -393,6 +393,38 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/pi-durable/01-project-design.md",
+      "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/pi-durable/02-architecture.md",
+      "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/pi-durable/03-implementation-plan.md",
+      "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/pi-durable/04-evaluation-harness.md",
+      "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/pi-durable/05-p0-source-verification.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/pi-durable/AGENTS.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "docs/pi-durable/README.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/pi-durable/development.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-supervision-branch.md",
       "audience": "maintainer-architecture"
     },
