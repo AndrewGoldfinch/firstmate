@@ -16,6 +16,7 @@ import { runDurableScenario, runExistingScenario, type ArmResult } from "./runne
 import { grade, negativeControls, type GradeResult } from "./grader.ts";
 import { runMatrix, type MatrixCaseResult } from "./matrix.ts";
 import { runDockerLane, type DockerLaneResult } from "./docker-lane.ts";
+import { runPilot, type PilotResult } from "./pilot.ts";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const outcomeScript = join(repoRoot, "bin", "fm-branch-outcome.sh");
@@ -40,6 +41,7 @@ export type EvaluationResults = {
   negativeControls: { name: string; rejected: boolean }[];
   matrix: MatrixCaseResult[];
   dockerLane: DockerLaneResult;
+  pilot: PilotResult;
 };
 
 export async function runEvaluation(workDir = mkdtempSync(join(tmpdir(), "fm-pi-durable-eval-"))): Promise<EvaluationResults> {
@@ -86,16 +88,18 @@ export async function runEvaluation(workDir = mkdtempSync(join(tmpdir(), "fm-pi-
 
   const negative = negativeControls(FLEET, durable.trace);
   const dockerLane = await runDockerLane();
-  const matrix = await runMatrix({ workDir, outcomeScript, dockerLane });
+  const pilot = await runPilot(workDir, outcomeScript);
+  const matrix = await runMatrix({ workDir, outcomeScript, dockerLane, pilot });
 
   return {
     generatedAt: new Date().toISOString(),
-    environment: `Node ${process.version}; local Linux host; deterministic faux model; disposable-container restart lane for the process-crash and reboot boundaries`,
+    environment: `Node ${process.version}; local Linux host; deterministic faux model for the arms; disposable-container restart lane for the process-crash and reboot boundaries`,
     arms: { existing, "pi-durable": durable, existingWithFault, "pi-durableWithFault": durableWithFault },
     grades,
     negativeControls: negative,
     matrix,
     dockerLane,
+    pilot,
   };
 }
 
@@ -161,6 +165,29 @@ export function renderReport(results: EvaluationResults): string {
     lines.push("```");
   }
   lines.push("");
+  lines.push("## Bounded real-model pilot");
+  lines.push("");
+  lines.push(`Status: ${results.pilot.status}${results.pilot.reason ? ` (${results.pilot.reason})` : ""}.`);
+  if (results.pilot.status === "pass") {
+    lines.push(
+      `Provider ${results.pilot.provider}, model ${results.pilot.model}; ${results.pilot.calls} calls in ${results.pilot.latencyMs} ms with ${results.pilot.timeouts ?? 0} timeouts.`,
+    );
+    lines.push(
+      `Both arms ran against the same real model answers, so the arms differ only in execution durability; arm A completed=${results.pilot.grades?.existing}, arm B completed=${results.pilot.grades?.["pi-durable"]}.`,
+    );
+    lines.push(
+      `The model matched the fixture's required disposition on ${results.pilot.matchingDispositions} of ${results.pilot.calls} tasks, so a real model does not simply reproduce the fixture.`,
+    );
+    lines.push("");
+    lines.push("| Task | Verdict | Latency | Answer |");
+    lines.push("| --- | --- | --- | --- |");
+    for (const answer of results.pilot.answers ?? []) {
+      lines.push(
+        `| ${answer.task} | ${answer.verdict} | ${answer.latencyMs} ms | ${answer.summary.replace(/\|/g, "/")} |`,
+      );
+    }
+  }
+  lines.push("");
   lines.push("## Benefit scorecard (deterministic, provisional)");
   lines.push("");
   lines.push("| Benefit | Metric | Arm A | Arm B | Status |");
@@ -194,7 +221,10 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("- The outcome read-back reconciles a missing receipt by matching the row identity the store exposes (task, verdict, summary); two distinct operations that commit identical rows are indistinguishable, so that case still requires an explicit receipt.");
   lines.push("- The container lane shares the host pid namespace on purpose, because the runtime ownership lock records a pid and treats a live pid as a live owner; a containerized restart inside its own pid namespace would need an explicit lock reclaim first.");
   lines.push("- The container lane is a process and store boundary, not an OS reboot: it proves the store reopens and the recorded authority reconciles, not that a kernel or filesystem failure is survivable.");
-  lines.push("- The operator diagnosis study, real-model pilot, token/cost comparison, and maintainability inventory from the design are out of scope for this deterministic environment.");
+  lines.push("- The pilot's answers vary between runs, so its disposition match count is one sample rather than a rate.");
+  lines.push("- The real-model pilot asks one shared set of model answers and replays them through both arms, so it isolates execution durability rather than measuring per-arm model variance; independent per-arm model calls remain the fuller form the design describes.");
+  lines.push("- The pilot drives the pinned provider directly because the durable conversation seam does not carry the session-affinity header the provider requires, so it does not exercise the prototype's execution seam end to end.");
+  lines.push("- Token and cost comparison and the operator diagnosis study from the design remain out of scope for this pass.");
   lines.push("- The improvement thresholds are not calibrated here; the deterministic runs are a conformance pilot, not evidence of a performance difference.");
   lines.push("");
   return lines.join("\n");

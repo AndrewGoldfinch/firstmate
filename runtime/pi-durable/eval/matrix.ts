@@ -16,6 +16,7 @@ import { SidecarClient } from "../src/sidecar-client.ts";
 import { createOutcomeSink } from "../src/outcome-sink.ts";
 import type { CandidateResult, OutcomeSink } from "../src/bridge.ts";
 import type { DockerLaneResult } from "./docker-lane.ts";
+import type { PilotResult } from "./pilot.ts";
 import { SimulatedCrash } from "./runner.ts";
 
 export type MatrixStatus = "pass" | "fail" | "not-covered" | "known-gap";
@@ -31,6 +32,7 @@ type CaseContext = {
   workDir: string;
   outcomeScript: string;
   dockerLane?: DockerLaneResult;
+  pilot?: PilotResult;
 };
 
 const RESULT: CandidateResult = { task: "T1", verdict: "routine", summary: "disposition=ready_for_review; ok" };
@@ -647,11 +649,27 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
   // Explicitly not covered in this environment.
   const notCovered: [string, string, string][] = [
     ["F09", "after delivery, before acknowledgement", "the existing routine-note delivery limitation is documented, not re-tested here"],
-    ["F16", "missing credentials or incompatible dependency", "a real credential provider is unavailable; the unknown-capability refusal is covered by the P1B suite"],
   ];
   for (const [id, title, reason] of notCovered) {
     results.push({ id, title, status: "not-covered", detail: reason });
   }
+
+  // F16 is about how a missing credential or incompatible dependency is handled:
+  // the bounded real-model pilot either runs against a reachable credential or
+  // records exactly why it cannot, and never fabricates model results.
+  const pilot = context.pilot;
+  results.push({
+    id: "F16",
+    title: "missing credentials or incompatible dependency",
+    status:
+      pilot?.status === "pass" || pilot?.status === "not-covered" ? "pass" : "fail",
+    detail:
+      pilot?.status === "pass"
+        ? `a real ${pilot.provider} credential was reachable and used for ${pilot.calls} model calls; unknown-capability refusal covered by the P1B suite`
+        : pilot?.status === "not-covered"
+          ? `no real credential path was usable and the pilot refused to fabricate results: ${pilot.reason}`
+          : `the real-model pilot failed: ${pilot?.reason ?? "no pilot result"}`,
+  });
 
   // F11 and F17 are exercised by the disposable-container restart lane, whose
   // failure boundary - kill and restart - is owned outside the container.
