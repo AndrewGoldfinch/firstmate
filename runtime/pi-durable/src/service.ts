@@ -1,18 +1,21 @@
 /**
- * Pi Durable sidecar service (P1A).
+ * Pi Durable sidecar service (P1A service/protocol, P1B identity and
+ * authority).
  *
  * One owner process per canonical FM_HOME. The service holds the single-owner
  * store lock, exposes a Unix-domain socket in a private directory, validates
- * bounded JSON requests against `protocol.ts`, and durably accepts operations
- * through `store.ts` and the upstream adapter in `provider.ts`.
+ * bounded JSON requests against `protocol.ts`, durably accepts operations
+ * through `store.ts`, and creates or reattaches a pinned supervision
+ * conversation through `provider.ts`.
  *
- * Design source: docs/pi-durable/02-architecture.md "Service boundary" and
- * "Proposed operations"; docs/pi-durable/03-implementation-plan.md P1A.
+ * Design source: docs/pi-durable/02-architecture.md "Service boundary",
+ * "Proposed operations", and "Fencing and startup recovery";
+ * docs/pi-durable/03-implementation-plan.md P1A and P1B.
  */
 
-import { chmodSync, mkdirSync, realpathSync, unlinkSync } from "node:fs";
+import { chmodSync, mkdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { OwnerLock } from "./lock.ts";
 import { OperationStore } from "./store.ts";
 import { DurableProvider, dependencyVersions } from "./provider.ts";
@@ -25,19 +28,24 @@ import {
   encodeResponse,
   errorResponse,
   parseRequest,
+  pinnedConfigDigest,
+  type AuthorityBinding,
+  type EnsureSupervisorRequest,
   type HealthResult,
   type OperationRecord,
+  type ResumeRequest,
   type SidecarRequest,
   type SidecarResponse,
   type SidecarResult,
   type SubmitResult,
+  type SupervisorBinding,
 } from "./protocol.ts";
 
 export type SidecarOptions = {
   /** Canonical FM_HOME for this owner. Created when absent. */
   home: string;
   socketPath?: string;
-  /** Adapter-owned acceptance store. */
+  /** Adapter-owned acceptance and identity store. */
   storePath?: string;
   /** Upstream Durable conversation store. */
   runtimeStorePath?: string;
@@ -244,11 +252,13 @@ export class DurableSidecar {
       case "health":
         return this.health();
       case "ensureSupervisor":
-        return this.ensureSupervisor(request.supervisorId);
+        return this.ensureSupervisor(request);
       case "submit":
         return this.submit(request);
       case "inspect":
         return { record: this.store.getOperation(request.operationId) };
+      case "resume":
+        return this.resume(request);
       case "shutdown": {
         setImmediate(() => {
           void this.stop();
@@ -269,15 +279,108 @@ export class DurableSidecar {
     };
   }
 
-  private async ensureSupervisor(supervisorId: string) {
-    const existing = this.store.getSupervisor(this.homeId, supervisorId);
-    if (existing) {
-      return { homeId: this.homeId, supervisorId, conversationId: existing, created: false };
+  /**
+   * Find or create the pinned supervision conversation and record the current
+   * FirstMate authority binding.
+   *
+   * Same-generation reconnects are idempotent and must match the recorded
+   * configuration and claim; a higher generation is a new owner and may pin a
+   * new configuration; a lower generation is stale and refused.
+   */
+  private async ensureSupervisor(request: EnsureSupervisorRequest) {
+    validateCwd(request.agent.cwd);
+    const configDigest = pinnedConfigDigest(request.capabilityProfile, request.agent);
+    const existing = this.store.getSupervisorBinding(this.homeId, request.supervisorId);
+    const now = this.now();
+
+    let conversationId: string;
+    let created: boolean;
+
+    if (!existing) {
+      ({ conversationId, created } = await this.provider.ensureConversation({ agent: request.agent }));
+    } else if (request.ownerGeneration < existing.generation) {
+      throw new ProtocolError(
+        "AUTHORITY_STALE",
+        `generation ${request.ownerGeneration} is behind the recorded generation ${existing.generation}`,
+      );
+    } else if (request.ownerGeneration === existing.generation) {
+      if (existing.configDigest !== configDigest) {
+        throw new ProtocolError(
+          "CONFIG_CONFLICT",
+          "same generation cannot repin the supervisor configuration",
+        );
+      }
+      requireSameClaim(existing, request);
+      ({ conversationId, created } = await this.provider.ensureConversation({
+        conversationId: existing.conversationId,
+        agent: request.agent,
+      }));
+    } else if (existing.configDigest === configDigest) {
+      ({ conversationId, created } = await this.provider.ensureConversation({
+        conversationId: existing.conversationId,
+        agent: request.agent,
+      }));
+    } else {
+      // A new owner with a different pin gets a fresh pinned conversation.
+      ({ conversationId, created } = await this.provider.ensureConversation({ agent: request.agent }));
     }
-    const conversationId = await this.provider.ensureRootConversation();
-    const created = this.store.putSupervisor(this.homeId, supervisorId, conversationId, this.now());
-    const stored = this.store.getSupervisor(this.homeId, supervisorId) ?? conversationId;
-    return { homeId: this.homeId, supervisorId, conversationId: stored, created };
+
+    const agent = await this.provider.readAgentConfig(conversationId);
+    const binding: SupervisorBinding = {
+      homeId: this.homeId,
+      supervisorId: request.supervisorId,
+      conversationId,
+      generation: request.ownerGeneration,
+      wakeClaimId: request.wakeClaimId,
+      rowIds: request.rowIds,
+      capabilityProfile: request.capabilityProfile,
+      configDigest,
+      agent,
+      createdAt: created || !existing ? now : existing.createdAt,
+      updatedAt: now,
+    };
+    this.store.putSupervisorBinding(binding);
+    return {
+      homeId: this.homeId,
+      supervisorId: request.supervisorId,
+      conversationId,
+      created,
+      generation: request.ownerGeneration,
+      capabilityProfile: request.capabilityProfile,
+      configDigest,
+      agent,
+    };
+  }
+
+  /**
+   * Guarded mutation: resume unfinished execution only under current authority.
+   * The authority check runs before the resume call.
+   */
+  private async resume(request: ResumeRequest) {
+    const existing = this.store.getSupervisorBinding(this.homeId, request.supervisorId);
+    if (!existing) {
+      throw new ProtocolError("AUTHORITY_UNKNOWN", "no recorded authority for this supervisor");
+    }
+    if (existing.capabilityProfile !== request.capabilityProfile) {
+      throw new ProtocolError("AUTHORITY_CONFLICT", "capability profile does not match the recorded authority");
+    }
+    if (request.ownerGeneration < existing.generation) {
+      throw new ProtocolError(
+        "AUTHORITY_STALE",
+        `generation ${request.ownerGeneration} is behind the recorded generation ${existing.generation}`,
+      );
+    }
+    if (request.ownerGeneration > existing.generation) {
+      throw new ProtocolError("AUTHORITY_UNKNOWN", "generation is not the recorded authority");
+    }
+    if (request.wakeClaimId !== existing.wakeClaimId) {
+      throw new ProtocolError("AUTHORITY_CONFLICT", "wake claim does not match the recorded authority");
+    }
+    if (!rowSubset(request.rowIds, existing.rowIds)) {
+      throw new ProtocolError("AUTHORITY_SCOPE", "requested rows are outside the recorded claim scope");
+    }
+    await this.provider.resume();
+    return { resumed: true as const, generation: existing.generation };
   }
 
   private submit(request: SubmitInput): SubmitResult {
@@ -357,6 +460,37 @@ export class DurableSidecar {
     }
     this.lock.release();
   }
+}
+
+function validateCwd(cwd: string): void {
+  if (!isAbsolute(cwd)) {
+    throw new ProtocolError("CWD_INVALID", "cwd must be an absolute path");
+  }
+  try {
+    if (!statSync(cwd).isDirectory()) {
+      throw new ProtocolError("CWD_INVALID", "cwd must be a directory");
+    }
+  } catch (error) {
+    if (error instanceof ProtocolError) throw error;
+    throw new ProtocolError("CWD_INVALID", "cwd does not exist");
+  }
+}
+
+function requireSameClaim(existing: SupervisorBinding, request: AuthorityBinding): void {
+  if (existing.wakeClaimId !== request.wakeClaimId || !sameRows(existing.rowIds, request.rowIds)) {
+    throw new ProtocolError("AUTHORITY_CONFLICT", "same generation carries a different claim or row set");
+  }
+}
+
+function sameRows(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  return b.every((row) => set.has(row));
+}
+
+function rowSubset(requested: readonly string[], recorded: readonly string[]): boolean {
+  const set = new Set(recorded);
+  return requested.every((row) => set.has(row));
 }
 
 function operationIdOf(request: SidecarRequest): string | undefined {

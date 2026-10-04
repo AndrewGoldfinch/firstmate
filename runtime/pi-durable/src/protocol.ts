@@ -1,18 +1,21 @@
 /**
- * Pi Durable sidecar wire protocol (P1A).
+ * Pi Durable sidecar wire protocol (P1A service/protocol, P1B identity and
+ * authority).
  *
  * This module is the single owner of the protocol version, the bounded request
- * schemas, the digest rules, and the error codes. The service validates every
- * inbound request here before any store or provider effect.
+ * schemas, the digest rules, the capability profiles, and the error codes. The
+ * service validates every inbound request here before any store or provider
+ * effect.
  *
- * Design source: docs/pi-durable/02-architecture.md "Service boundary" and
- * "Proposed operations"; docs/pi-durable/03-implementation-plan.md P1A.
+ * Design source: docs/pi-durable/02-architecture.md "Service boundary",
+ * "Proposed operations", and "Fencing and startup recovery";
+ * docs/pi-durable/03-implementation-plan.md P1A and P1B.
  */
 
 import { createHash } from "node:crypto";
 
 /** Wire protocol version. A request carrying any other value is refused. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** Hard cap on one JSON request or response frame, in bytes. */
 export const DEFAULT_MAX_MESSAGE_BYTES = 262_144;
@@ -39,6 +42,7 @@ export type OperationName =
   | "ensureSupervisor"
   | "submit"
   | "inspect"
+  | "resume"
   | "shutdown";
 
 export const OPERATION_NAMES: readonly OperationName[] = [
@@ -46,8 +50,37 @@ export const OPERATION_NAMES: readonly OperationName[] = [
   "ensureSupervisor",
   "submit",
   "inspect",
+  "resume",
   "shutdown",
 ];
+
+/** Allowed thinking levels, mirroring the pinned `pi-ai` model levels. */
+export const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+/**
+ * Named capability profiles. The profile is the adapter's own narrow tool
+ * grant, never the host default: a conversation created for a profile selects
+ * exactly these extensions and tools.
+ */
+export const CAPABILITY_PROFILES = {
+  "supervision-observe-v1": { extensions: [], tools: [] },
+} as const;
+
+export type CapabilityProfileName = keyof typeof CAPABILITY_PROFILES;
+
+export const CAPABILITY_PROFILE_NAMES = Object.keys(
+  CAPABILITY_PROFILES,
+) as CapabilityProfileName[];
 
 export type ErrorCode =
   | "BAD_REQUEST"
@@ -59,6 +92,13 @@ export type ErrorCode =
   | "DIGEST_MISMATCH"
   | "CONFLICT"
   | "NOT_FOUND"
+  | "CAPABILITY_UNKNOWN"
+  | "CWD_INVALID"
+  | "CONFIG_CONFLICT"
+  | "AUTHORITY_UNKNOWN"
+  | "AUTHORITY_STALE"
+  | "AUTHORITY_CONFLICT"
+  | "AUTHORITY_SCOPE"
   | "INTERNAL";
 
 /** A refusal that maps to a protocol error code. */
@@ -79,10 +119,28 @@ type BaseRequest = {
 
 export type HealthRequest = BaseRequest & { op: "health" };
 
-export type EnsureSupervisorRequest = BaseRequest & {
-  op: "ensureSupervisor";
-  supervisorId: string;
+/** A pinned agent configuration carried by `ensureSupervisor`. */
+export type PinnedAgent = {
+  model: { provider: string; modelId: string };
+  thinkingLevel: ThinkingLevel;
+  instructions?: string;
+  cwd: string;
 };
+
+/** The FirstMate-owned authority binding for one supervisor. */
+export type AuthorityBinding = {
+  ownerGeneration: number;
+  wakeClaimId: string;
+  rowIds: string[];
+};
+
+export type EnsureSupervisorRequest = BaseRequest &
+  AuthorityBinding & {
+    op: "ensureSupervisor";
+    supervisorId: string;
+    capabilityProfile: string;
+    agent: PinnedAgent;
+  };
 
 export type SubmitRequest = BaseRequest & {
   op: "submit";
@@ -102,6 +160,13 @@ export type InspectRequest = BaseRequest & {
   operationId: string;
 };
 
+export type ResumeRequest = BaseRequest &
+  AuthorityBinding & {
+    op: "resume";
+    supervisorId: string;
+    capabilityProfile: string;
+  };
+
 export type ShutdownRequest = BaseRequest & { op: "shutdown" };
 
 export type SidecarRequest =
@@ -109,6 +174,7 @@ export type SidecarRequest =
   | EnsureSupervisorRequest
   | SubmitRequest
   | InspectRequest
+  | ResumeRequest
   | ShutdownRequest;
 
 export type OperationRecord = {
@@ -121,6 +187,21 @@ export type OperationRecord = {
   rowIds: string[];
   ownerGeneration: number | null;
   wakeClaimId: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** The durable supervisor binding: conversation identity, pin, and authority. */
+export type SupervisorBinding = {
+  homeId: string;
+  supervisorId: string;
+  conversationId: string;
+  generation: number;
+  wakeClaimId: string;
+  rowIds: string[];
+  capabilityProfile: string;
+  configDigest: string;
+  agent: JsonValue;
   createdAt: number;
   updatedAt: number;
 };
@@ -139,6 +220,10 @@ export type EnsureSupervisorResult = {
   supervisorId: string;
   conversationId: string;
   created: boolean;
+  generation: number;
+  capabilityProfile: string;
+  configDigest: string;
+  agent: JsonValue;
 };
 
 export type SubmitResult = {
@@ -148,11 +233,14 @@ export type SubmitResult = {
 
 export type InspectResult = { record: OperationRecord | null };
 
+export type ResumeResult = { resumed: true; generation: number };
+
 export type SidecarResult =
   | HealthResult
   | EnsureSupervisorResult
   | SubmitResult
   | InspectResult
+  | ResumeResult
   | { stopped: true };
 
 export type SidecarResponse =
@@ -181,6 +269,20 @@ export function digestOf(value: JsonValue): string {
 
 export function isDigest(value: string): boolean {
   return /^[0-9a-f]{64}$/.test(value);
+}
+
+/** The canonical configuration digest for a pinned conversation. */
+export function pinnedConfigDigest(profile: string, agent: PinnedAgent): string {
+  const grant = CAPABILITY_PROFILES[profile as CapabilityProfileName] ?? { extensions: [], tools: [] };
+  return digestOf({
+    capabilityProfile: profile,
+    model: { provider: agent.model.provider, modelId: agent.model.modelId },
+    thinkingLevel: agent.thinkingLevel,
+    instructions: agent.instructions ?? null,
+    cwd: agent.cwd,
+    extensions: [...grant.extensions],
+    tools: [...grant.tools],
+  });
 }
 
 function fail(code: ErrorCode, message: string): never {
@@ -216,6 +318,61 @@ function requireJson(source: Record<string, unknown>, key: string): JsonValue {
   return source[key] as JsonValue;
 }
 
+function parseRowIds(source: Record<string, unknown>, key: string): string[] {
+  const raw = source[key];
+  if (!Array.isArray(raw) || raw.length > MAX_ROW_IDS) {
+    fail("BAD_REQUEST", `${key} must be an array of at most ${MAX_ROW_IDS} strings`);
+  }
+  return raw.map((id) => {
+    if (typeof id !== "string" || id.length === 0 || id.length > MAX_ID_CHARS) {
+      fail("BAD_REQUEST", `${key} entries must be non-empty bounded strings`);
+    }
+    return id;
+  });
+}
+
+function parseGeneration(source: Record<string, unknown>, key: string): number {
+  const value = source[key];
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    fail("BAD_REQUEST", `${key} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function parseAuthority(source: Record<string, unknown>): AuthorityBinding {
+  return {
+    ownerGeneration: parseGeneration(source, "ownerGeneration"),
+    wakeClaimId: asString(source, "wakeClaimId"),
+    rowIds: parseRowIds(source, "rowIds"),
+  };
+}
+
+function parseCapabilityProfile(source: Record<string, unknown>): string {
+  const profile = asString(source, "capabilityProfile");
+  if (!(profile in CAPABILITY_PROFILES)) {
+    fail("CAPABILITY_UNKNOWN", `unknown capability profile ${JSON.stringify(profile)}`);
+  }
+  return profile;
+}
+
+function parsePinnedAgent(source: Record<string, unknown>): PinnedAgent {
+  const model = asObject(source.model);
+  const provider = asString(model, "provider");
+  const modelId = asString(model, "modelId");
+  const thinkingLevel = asString(source, "thinkingLevel");
+  if (!(THINKING_LEVELS as readonly string[]).includes(thinkingLevel)) {
+    fail("BAD_REQUEST", `thinkingLevel must be one of ${THINKING_LEVELS.join(", ")}`);
+  }
+  const cwd = asString(source, "cwd");
+  const instructions = optionalString(source, "instructions");
+  return {
+    model: { provider, modelId },
+    thinkingLevel: thinkingLevel as ThinkingLevel,
+    ...(instructions !== undefined ? { instructions } : {}),
+    cwd,
+  };
+}
+
 /**
  * Validate one decoded request frame.
  *
@@ -240,9 +397,24 @@ export function parseRequest(raw: unknown): SidecarRequest {
     case "health":
       return { ...base, op: "health" };
     case "ensureSupervisor":
-      return { ...base, op: "ensureSupervisor", supervisorId: asString(source, "supervisorId") };
+      return {
+        ...base,
+        ...parseAuthority(source),
+        op: "ensureSupervisor",
+        supervisorId: asString(source, "supervisorId"),
+        capabilityProfile: parseCapabilityProfile(source),
+        agent: parsePinnedAgent(source),
+      };
     case "inspect":
       return { ...base, op: "inspect", operationId: asString(source, "operationId") };
+    case "resume":
+      return {
+        ...base,
+        ...parseAuthority(source),
+        op: "resume",
+        supervisorId: asString(source, "supervisorId"),
+        capabilityProfile: parseCapabilityProfile(source),
+      };
     case "shutdown":
       return { ...base, op: "shutdown" };
     case "submit": {
@@ -256,19 +428,7 @@ export function parseRequest(raw: unknown): SidecarRequest {
       if (configDigest !== undefined && !isDigest(configDigest)) {
         fail("BAD_REQUEST", "configDigest must be a lowercase SHA-256 hex digest");
       }
-      const rowIdsRaw = source.rowIds;
-      let rowIds: string[] | undefined;
-      if (rowIdsRaw !== undefined) {
-        if (!Array.isArray(rowIdsRaw) || rowIdsRaw.length > MAX_ROW_IDS) {
-          fail("BAD_REQUEST", `rowIds must be an array of at most ${MAX_ROW_IDS} strings`);
-        }
-        rowIds = rowIdsRaw.map((id) => {
-          if (typeof id !== "string" || id.length === 0 || id.length > MAX_ID_CHARS) {
-            fail("BAD_REQUEST", "rowIds entries must be non-empty bounded strings");
-          }
-          return id;
-        });
-      }
+      const rowIds = "rowIds" in source ? parseRowIds(source, "rowIds") : undefined;
       const ownerGenerationRaw = source.ownerGeneration;
       let ownerGeneration: number | undefined;
       if (ownerGenerationRaw !== undefined) {

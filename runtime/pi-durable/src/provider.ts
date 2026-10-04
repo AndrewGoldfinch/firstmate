@@ -1,11 +1,11 @@
 /**
- * Upstream Durable adapter (P1A).
+ * Upstream Durable adapter (P1A service/protocol, P1B identity and authority).
  *
  * Every call into `@earendil-works/pi-durable`, `@earendil-works/pi-ai`, and
  * `@earendil-works/chord` lives here so the service and protocol stay free of
- * upstream API details. P1A opens the durable conversation store and finds or
- * creates the root supervision conversation; it does not submit or resume any
- * model work.
+ * upstream API details. P1B creates or reattaches a dedicated supervision
+ * conversation with an explicit pinned agent configuration, so it never
+ * inherits tools from an unrelated root conversation.
  */
 
 import { createRequire } from "node:module";
@@ -13,8 +13,11 @@ import { createModels } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import type { JsonValue, PinnedAgent } from "./protocol.ts";
 
 const require = createRequire(import.meta.url);
+
+type Conversation = Awaited<ReturnType<Harness["createConversation"]>>;
 
 function packageVersion(name: string): string {
   try {
@@ -36,6 +39,11 @@ export function dependencyVersions(): Record<string, string> {
 export type DurableProviderOptions = {
   /** Path to the upstream Durable SQLite conversation store. */
   storePath: string;
+};
+
+export type EnsureConversationResult = {
+  conversationId: string;
+  created: boolean;
 };
 
 export class DurableProvider {
@@ -64,11 +72,63 @@ export class DurableProvider {
     return this.opening;
   }
 
-  /** Find or create the root supervision conversation and return its id. */
-  async ensureRootConversation(): Promise<string> {
+  /**
+   * Locate the recorded conversation, or create a fresh one pinned to `agent`.
+   *
+   * A new conversation is created with `ownership: ownerless` and an explicit
+   * agent grant, never by adopting the reserved root conversation, so an
+   * unrelated root configuration cannot widen its tools.
+   */
+  async ensureConversation(input: {
+    conversationId?: string;
+    agent: PinnedAgent;
+  }): Promise<EnsureConversationResult> {
     const harness = await this.openHarness();
-    const root = await harness.root(BACKGROUND_CONTEXT);
-    return String(root.id);
+    if (input.conversationId) {
+      const existing = await harness.conversation(input.conversationId as never, BACKGROUND_CONTEXT);
+      if (existing) {
+        return { conversationId: String(existing.id), created: false };
+      }
+    }
+    const created = await harness.createConversation(
+      {
+        ownership: { kind: "ownerless" },
+        agent: {
+          model: {
+            provider: input.agent.model.provider,
+            modelId: input.agent.model.modelId,
+          },
+          thinkingLevel: input.agent.thinkingLevel,
+          extensions: [],
+          tools: [],
+          ...(input.agent.instructions !== undefined
+            ? { instructions: input.agent.instructions }
+            : {}),
+          cwd: input.agent.cwd,
+        },
+      },
+      BACKGROUND_CONTEXT,
+    );
+    return { conversationId: String(created.id), created: true };
+  }
+
+  /** Read the pinned `pi.agent` document of a conversation, for verification. */
+  async readAgentConfig(conversationId: string): Promise<JsonValue> {
+    const harness = await this.openHarness();
+    const conversation: Conversation | undefined = await harness.conversation(
+      conversationId as never,
+      BACKGROUND_CONTEXT,
+    );
+    if (!conversation) return null;
+    const state = await conversation.viewState(BACKGROUND_CONTEXT);
+    const docs = (state as unknown as { value: { docs?: Record<string, JsonValue> } }).value?.docs;
+    return docs?.["pi.agent"] ?? null;
+  }
+
+  /** Resume any run the previous process left unfinished. Harness-wide. */
+  async resume(): Promise<void> {
+    const harness = await this.openHarness();
+    harness.resume();
   }
 
   async close(): Promise<void> {

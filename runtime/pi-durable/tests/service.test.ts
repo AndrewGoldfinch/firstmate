@@ -12,6 +12,7 @@ import { DurableSidecar } from "../src/service.ts";
 import { OwnerConflictError } from "../src/lock.ts";
 import { PROTOCOL_VERSION, type HealthResult } from "../src/protocol.ts";
 import { call } from "./helpers/client.ts";
+import { ensureSupervisorRequest } from "./helpers/requests.ts";
 
 const homes: string[] = [];
 const sidecars: DurableSidecar[] = [];
@@ -85,19 +86,11 @@ test("a second owner for the same home is refused", async () => {
 });
 
 test("ensureSupervisor is idempotent per home and supervisor", async () => {
-  const sidecar = await start(tempHome());
-  const first = await call(sidecar.socketPath, {
-    protocolVersion: PROTOCOL_VERSION,
-    homeId: sidecar.homeId,
-    op: "ensureSupervisor",
-    supervisorId: "pi-supervisor",
-  });
-  const second = await call(sidecar.socketPath, {
-    protocolVersion: PROTOCOL_VERSION,
-    homeId: sidecar.homeId,
-    op: "ensureSupervisor",
-    supervisorId: "pi-supervisor",
-  });
+  const home = tempHome();
+  const sidecar = await start(home);
+  const request = ensureSupervisorRequest({ homeId: sidecar.homeId, cwd: home });
+  const first = await call(sidecar.socketPath, request);
+  const second = await call(sidecar.socketPath, request);
   assert.equal(first.ok, true);
   assert.equal(second.ok, true);
   const a = (first as { ok: true; result: { conversationId: string; created: boolean } }).result;

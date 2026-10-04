@@ -15,6 +15,7 @@ import { after, test } from "node:test";
 import { DurableSidecar } from "../src/service.ts";
 import { PROTOCOL_VERSION, digestOf, type SubmitResult } from "../src/protocol.ts";
 import { call, exchange } from "./helpers/client.ts";
+import { ensureSupervisorRequest, submitRequest } from "./helpers/requests.ts";
 
 const homes: string[] = [];
 const sidecars: DurableSidecar[] = [];
@@ -29,18 +30,6 @@ async function start(home: string, overrides: Partial<Parameters<typeof DurableS
   const sidecar = await DurableSidecar.start({ home, ...overrides });
   sidecars.push(sidecar);
   return sidecar;
-}
-
-function submitRequest(homeId: string, operationId: string, payload: unknown, config?: unknown) {
-  return {
-    protocolVersion: PROTOCOL_VERSION,
-    homeId,
-    op: "submit",
-    operationId,
-    supervisorId: "pi-supervisor",
-    payload,
-    ...(config !== undefined ? { config } : {}),
-  };
 }
 
 function resultOf(response: unknown): SubmitResult {
@@ -158,20 +147,11 @@ test("an oversized frame is refused", async () => {
 });
 
 test("the outstanding-operations bound is enforced", async () => {
-  const sidecar = await start(tempHome(), { maxOutstanding: 1 });
+  const home = tempHome();
+  const sidecar = await start(home, { maxOutstanding: 1 });
   const frames = [
-    JSON.stringify({
-      protocolVersion: PROTOCOL_VERSION,
-      homeId: sidecar.homeId,
-      op: "ensureSupervisor",
-      supervisorId: "sup-a",
-    }),
-    JSON.stringify({
-      protocolVersion: PROTOCOL_VERSION,
-      homeId: sidecar.homeId,
-      op: "ensureSupervisor",
-      supervisorId: "sup-b",
-    }),
+    JSON.stringify(ensureSupervisorRequest({ homeId: sidecar.homeId, cwd: home, supervisorId: "sup-a" })),
+    JSON.stringify(ensureSupervisorRequest({ homeId: sidecar.homeId, cwd: home, supervisorId: "sup-b" })),
   ];
   const lines = await exchange(sidecar.socketPath, frames, 2);
   const codes = lines.map((line) => {

@@ -99,12 +99,17 @@ faux.setResponses([fauxAssistantMessage([fauxToolCall("my_tool", {})], { stopRea
 
 Note: a turn that calls a tool must set `{ stopReason: "toolUse" }`. With the default `"stop"`, the harness treats the message as the final answer and never runs the tool (observed directly).
 
-## P1A sidecar (`runtime/pi-durable`)
+## P1A and P1B sidecar (`runtime/pi-durable`)
 
 The P1A service, protocol, and single-owner store lock live in `runtime/pi-durable/`.
 It is a Node package with pinned dependencies and no compile step, because Node 22.21.1 runs the TypeScript directly through type stripping.
-The service opens the upstream Durable SQLite conversation store through `provider.ts`, keeps its own acceptance store, and binds a private Unix-domain socket per canonical `FM_HOME`.
+The service opens the upstream Durable SQLite conversation store through `provider.ts`, keeps its own acceptance and identity store, and binds a private Unix-domain socket per canonical `FM_HOME`.
 It is opt-in and is not wired into the existing Pi supervision path; the provider seam belongs to P1C.
+
+P1B adds the durable supervisor binding: conversation identity, a pinned configuration digest over model, thinking level, instructions, cwd, and capability profile, and the current FirstMate authority generation, wake claim, and row set.
+`ensureSupervisor` creates or reattaches a dedicated conversation with an explicit narrow agent grant (`extensions` and `tools` empty) instead of adopting the reserved root conversation, so an unrelated root configuration cannot widen it.
+`resume` is a guarded mutation: the authority check runs before the harness resume call, and a stale, unknown, conflicting, or out-of-scope binding is refused.
+The wire protocol version is 2.
 
 ```sh
 cd runtime/pi-durable
@@ -113,5 +118,6 @@ npm run typecheck      # tsc --noEmit -p tsconfig.json
 npm test               # node --test tests/*.test.ts
 ```
 
-Result on 2026-10-04: `npm run typecheck` exits 0, and `npm test` reports 25 tests, 25 pass, 0 fail.
+Result on 2026-10-04: `npm run typecheck` exits 0, and `npm test` reports 32 tests, 32 pass, 0 fail.
 The suite covers the P1A acceptance gate: two owner processes cannot open one store (in-process and cross-process), a wrong home or an incompatible protocol is refused, a repeated operation ID returns the original acceptance without a new execution, a changed payload or configuration under the same ID is refused, no secret reaches the store file, diagnostics, or a reply, and the message-size and outstanding-operation bounds hold.
+It also covers the P1B gate: restart returns to the original operation and conversation, stale work cannot execute a guarded mutation, and a fresh conversation is pinned to the narrow capability profile and cannot inherit an unrelated root configuration.
