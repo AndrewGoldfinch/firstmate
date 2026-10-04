@@ -15,6 +15,7 @@ import { FLEET } from "./fleet.ts";
 import { runDurableScenario, runExistingScenario, type ArmResult } from "./runner.ts";
 import { grade, negativeControls, type GradeResult } from "./grader.ts";
 import { runMatrix, type MatrixCaseResult } from "./matrix.ts";
+import { runDockerLane, type DockerLaneResult } from "./docker-lane.ts";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const outcomeScript = join(repoRoot, "bin", "fm-branch-outcome.sh");
@@ -38,6 +39,7 @@ export type EvaluationResults = {
   };
   negativeControls: { name: string; rejected: boolean }[];
   matrix: MatrixCaseResult[];
+  dockerLane: DockerLaneResult;
 };
 
 export async function runEvaluation(workDir = mkdtempSync(join(tmpdir(), "fm-pi-durable-eval-"))): Promise<EvaluationResults> {
@@ -83,15 +85,17 @@ export async function runEvaluation(workDir = mkdtempSync(join(tmpdir(), "fm-pi-
   };
 
   const negative = negativeControls(FLEET, durable.trace);
-  const matrix = await runMatrix({ workDir, outcomeScript });
+  const dockerLane = await runDockerLane();
+  const matrix = await runMatrix({ workDir, outcomeScript, dockerLane });
 
   return {
     generatedAt: new Date().toISOString(),
-    environment: `Node ${process.version}; local Linux host; no VM or reboot boundary; deterministic faux model`,
+    environment: `Node ${process.version}; local Linux host; deterministic faux model; disposable-container restart lane for the process-crash and reboot boundaries`,
     arms: { existing, "pi-durable": durable, existingWithFault, "pi-durableWithFault": durableWithFault },
     grades,
     negativeControls: negative,
     matrix,
+    dockerLane,
   };
 }
 
@@ -114,7 +118,7 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("## Environment and scope");
   lines.push("");
   lines.push(results.environment);
-  lines.push("No real VM or reboot boundary exists in this environment, so machine-recovery cases are recorded as not-covered, never faked.");
+  lines.push("A disposable-container restart lane provides the process-crash and store-reopen boundaries; no real VM or OS reboot boundary exists, and every case this environment cannot exercise is recorded as not-covered, never faked.");
   lines.push("Arm A is a reduced model of the existing in-process path: it uses the real outcome store and wake semantics but not the full Pi supervision extension.");
   lines.push("Arm B is the real durable sidecar, bridge, and outcome sink with a deterministic faux model.");
   lines.push("");
@@ -140,6 +144,22 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("| Case | Injection point | Status | Detail |");
   lines.push("| --- | --- | --- | --- |");
   for (const caseResult of results.matrix) lines.push(matrixRow(caseResult));
+  lines.push("");
+  lines.push("## Disposable-container restart lane");
+  lines.push("");
+  lines.push(
+    `Status: ${results.dockerLane.status}${results.dockerLane.reason ? ` (${results.dockerLane.reason})` : ""}.`,
+  );
+  lines.push(
+    `Image: ${results.dockerLane.image ?? "none"}; Docker server: ${results.dockerLane.dockerServer ?? "unknown"}.`,
+  );
+  lines.push("The failure boundary - SIGKILL and restart - is owned by the host, outside the container.");
+  for (const command of results.dockerLane.commands ?? []) {
+    lines.push("");
+    lines.push("```sh");
+    lines.push(command);
+    lines.push("```");
+  }
   lines.push("");
   lines.push("## Benefit scorecard (deterministic, provisional)");
   lines.push("");
@@ -170,8 +190,10 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("");
   lines.push("- Arm A is a reduced model, not the full pinned Pi supervision extension; it demonstrates the durability gap of an in-process owner without durable acceptance, and does not exercise the extension's own recovery.");
   lines.push("- The faux model returns fixture truth, so this harness measures execution durability, not model judgment.");
-  lines.push("- F05, F09, F11, F12, F16, and F17 are not covered here: no read-tool boundary, no cancellation operation, no real credential provider, and no VM or reboot boundary.");
-  lines.push("- F08 is a known cross-store gap: a receipt lost between the outcome append and the adapter record can duplicate on retry, which the design requires reconciling.");
+  lines.push("- F09 and F16 are not covered here: the routine-note delivery limitation is documented rather than re-tested, and the deterministic lanes run without a real credential provider.");
+  lines.push("- The outcome read-back reconciles a missing receipt by matching the row identity the store exposes (task, verdict, summary); two distinct operations that commit identical rows are indistinguishable, so that case still requires an explicit receipt.");
+  lines.push("- The container lane shares the host pid namespace on purpose, because the runtime ownership lock records a pid and treats a live pid as a live owner; a containerized restart inside its own pid namespace would need an explicit lock reclaim first.");
+  lines.push("- The container lane is a process and store boundary, not an OS reboot: it proves the store reopens and the recorded authority reconciles, not that a kernel or filesystem failure is survivable.");
   lines.push("- The operator diagnosis study, real-model pilot, token/cost comparison, and maintainability inventory from the design are out of scope for this deterministic environment.");
   lines.push("- The improvement thresholds are not calibrated here; the deterministic runs are a conformance pilot, not evidence of a performance difference.");
   lines.push("");

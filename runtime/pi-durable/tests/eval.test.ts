@@ -13,6 +13,10 @@ import { runEvaluation } from "../eval/main.ts";
 
 const workDirs: string[] = [];
 
+// The container lane is exercised by `npm run eval`; the unit test skips it so
+// the suite stays fast and independent of a Docker daemon.
+process.env.FM_PI_DURABLE_SKIP_DOCKER = "1";
+
 after(() => {
   for (const dir of workDirs) rmSync(dir, { recursive: true, force: true });
 });
@@ -44,4 +48,5 @@ test("the deterministic harness grades both arms and rejects every corrupted tra
   assert.equal(results.matrix.filter((caseResult) => caseResult.status === "fail").length, 0);
   assert.ok(results.matrix.filter((caseResult) => caseResult.status === "pass").length >= 10);
   assert.ok(results.matrix.some((caseResult) => caseResult.status === "not-covered"));
+  assert.equal(results.dockerLane.status, "not-covered");
 });

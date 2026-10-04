@@ -15,6 +15,7 @@ import { runDurableDispatch } from "../src/bridge.ts";
 import { SidecarClient } from "../src/sidecar-client.ts";
 import { createOutcomeSink } from "../src/outcome-sink.ts";
 import type { CandidateResult, OutcomeSink } from "../src/bridge.ts";
+import type { DockerLaneResult } from "./docker-lane.ts";
 import { SimulatedCrash } from "./runner.ts";
 
 export type MatrixStatus = "pass" | "fail" | "not-covered" | "known-gap";
@@ -29,6 +30,7 @@ export type MatrixCaseResult = {
 type CaseContext = {
   workDir: string;
   outcomeScript: string;
+  dockerLane?: DockerLaneResult;
 };
 
 const RESULT: CandidateResult = { task: "T1", verdict: "routine", summary: "disposition=ready_for_review; ok" };
@@ -645,13 +647,33 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
   // Explicitly not covered in this environment.
   const notCovered: [string, string, string][] = [
     ["F09", "after delivery, before acknowledgement", "the existing routine-note delivery limitation is documented, not re-tested here"],
-    ["F11", "service crash with valid generation", "covered by F02/F04 recovery; a real process crash needs the VM lane"],
     ["F16", "missing credentials or incompatible dependency", "a real credential provider is unavailable; the unknown-capability refusal is covered by the P1B suite"],
-    ["F17", "disposable host reboot", "no VM or reboot boundary exists in this environment"],
   ];
   for (const [id, title, reason] of notCovered) {
     results.push({ id, title, status: "not-covered", detail: reason });
   }
+
+  // F11 and F17 are exercised by the disposable-container restart lane, whose
+  // failure boundary - kill and restart - is owned outside the container.
+  const lane = context.dockerLane;
+  const laneStatus = (value: string | undefined): MatrixStatus =>
+    value === "pass" ? "pass" : value === "fail" ? "fail" : "not-covered";
+  results.push({
+    id: "F11",
+    title: "service crash with valid generation",
+    status: laneStatus(lane?.f11?.status),
+    detail: lane?.f11
+      ? `image=${lane.image ?? "unknown"} docker=${lane.dockerServer ?? "unknown"} ${JSON.stringify(lane.f11.evidence)}`
+      : `container lane: ${lane?.reason ?? "not run"}`,
+  });
+  results.push({
+    id: "F17",
+    title: "disposable host reboot",
+    status: laneStatus(lane?.f17?.status),
+    detail: lane?.f17
+      ? `image=${lane.image ?? "unknown"} docker=${lane.dockerServer ?? "unknown"} ${JSON.stringify(lane.f17.evidence)}`
+      : `container lane: ${lane?.reason ?? "not run"}`,
+  });
   return results.sort((a, b) => a.id.localeCompare(b.id));
 }
 
