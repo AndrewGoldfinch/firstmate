@@ -5,8 +5,9 @@ A small index for a reviewing agent. Everything below lives on the branch/links 
 ## Where
 
 - Fork: https://github.com/AndrewGoldfinch/firstmate
-- Branch: `experiment/pi-durable-supervision` (head `77b49eb007be57ce4d117503f94626332ce32b8f`)
-- Full diff vs fork `main`: https://github.com/AndrewGoldfinch/firstmate/compare/main...experiment/pi-durable-supervision
+- Branch: `experiment/pi-durable-review-fixes` (local-only; review-fixes commit `05e81277`; not pushed)
+- Prototype branch: `experiment/pi-durable-supervision` (head `77b49eb007be57ce4d117503f94626332ce32b8f`)
+- Prototype full diff vs fork `main`: https://github.com/AndrewGoldfinch/firstmate/compare/main...experiment/pi-durable-supervision
 - Base: `1f3e7696` (upstream `main` at P0 start; upstream is untouched)
 
 ## What this is
@@ -45,6 +46,7 @@ GitHub: [report](https://github.com/AndrewGoldfinch/firstmate/blob/experiment/pi
 | P1D bounded observation | `f054e8df` |
 | P2 evaluation harness + report | `efda6d9e` |
 | P2b coverage + pilot + calibration | `4e34845b`, `79c12f1a`, `fc620173`, `41397d8b`, `f891eb4c`, `b03e80a9`, `3bd13ea7`, `77b49eb0` |
+| Reviewer summary + review fixes | `432126c9`, `05e81277` |
 
 ## How to verify
 
