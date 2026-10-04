@@ -55,6 +55,7 @@ export type OperationName =
   | "observeAck"
   | "resume"
   | "cancel"
+  | "readTool"
   | "shutdown";
 
 export const OPERATION_NAMES: readonly OperationName[] = [
@@ -68,6 +69,7 @@ export const OPERATION_NAMES: readonly OperationName[] = [
   "observeAck",
   "resume",
   "cancel",
+  "readTool",
   "shutdown",
 ];
 
@@ -230,6 +232,39 @@ export type ResumeRequest = BaseRequest &
     capabilityProfile: string;
   };
 
+export type ReadToolResult = {
+  operationId: string;
+  tool: ReadToolName;
+  category: "read";
+  replay: "safe";
+  /** The durable read attempt number this call performed. */
+  attempt: number;
+  /** True when this call re-ran a declared safe read after an earlier attempt. */
+  replayed: boolean;
+  snapshot: JsonValue;
+};
+
+/**
+ * The declared read tools. Each has no side effects, takes only structured
+ * arguments validated here, and derives authority from the service binding, so
+ * a declared safe read may be replayed. Nothing outside this table is callable,
+ * which is what keeps the boundary declared rather than arbitrary.
+ */
+export const READ_TOOL_DECLARATIONS = {
+  "operation-snapshot": { category: "read", replay: "safe" },
+} as const;
+export type ReadToolName = keyof typeof READ_TOOL_DECLARATIONS;
+
+/** Invoke one declared read tool under current authority. */
+export type ReadToolRequest = BaseRequest &
+  AuthorityBinding & {
+    op: "readTool";
+    supervisorId: string;
+    capabilityProfile: string;
+    operationId: string;
+    tool: string;
+  };
+
 export type ShutdownRequest = BaseRequest & { op: "shutdown" };
 
 /**
@@ -273,6 +308,7 @@ export type SidecarRequest =
   | ObserveAckRequest
   | ResumeRequest
   | CancelRequest
+  | ReadToolRequest
   | ShutdownRequest;
 
 export type OperationRecord = {
@@ -363,6 +399,7 @@ export type SidecarResult =
   | ObserveAckResult
   | ResumeResult
   | CancelResult
+  | ReadToolResult
   | { stopped: true };
 
 export type SidecarResponse =
@@ -594,6 +631,16 @@ export function parseRequest(raw: unknown): SidecarRequest {
         scope: scope as CancelScope,
       };
     }
+    case "readTool":
+      return {
+        ...base,
+        ...parseAuthority(source),
+        op: "readTool",
+        supervisorId: asString(source, "supervisorId"),
+        capabilityProfile: parseCapabilityProfile(source),
+        operationId: asString(source, "operationId"),
+        tool: asString(source, "tool"),
+      };
     case "shutdown":
       return { ...base, op: "shutdown" };
     case "submit": {

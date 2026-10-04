@@ -26,6 +26,7 @@ import {
   MAX_OBSERVATIONS,
   PROTOCOL_VERSION,
   ProtocolError,
+  READ_TOOL_DECLARATIONS,
   digestOf,
   encodeResponse,
   errorResponse,
@@ -41,6 +42,9 @@ import {
   type ObserveAckRequest,
   type ObserveRequest,
   type OperationRecord,
+  type ReadToolName,
+  type ReadToolRequest,
+  type ReadToolResult,
   type ReceiptRequest,
   type ResumeRequest,
   type SidecarRequest,
@@ -297,6 +301,8 @@ export class DurableSidecar {
         return this.resume(request);
       case "cancel":
         return this.cancel(request);
+      case "readTool":
+        return this.readTool(request);
       case "shutdown": {
         setImmediate(() => {
           void this.stop();
@@ -430,6 +436,48 @@ export class DurableSidecar {
     const existing = this.authorize(request);
     await this.provider.resume();
     return { resumed: true as const, generation: existing.generation };
+  }
+
+  /**
+   * Declared read tool: structured arguments only, no side effects, and a
+   * declared safe-replay treatment. An undeclared name is refused, so the model
+   * can never reach anything outside the declaration table.
+   */
+  private async readTool(request: ReadToolRequest): Promise<ReadToolResult> {
+    this.authorize(request);
+    const declaration = READ_TOOL_DECLARATIONS[request.tool as ReadToolName];
+    if (!declaration) {
+      throw new ProtocolError(
+        "CAPABILITY_UNKNOWN",
+        `undeclared read tool ${JSON.stringify(request.tool)}`,
+      );
+    }
+    const priorAttempts = this.store
+      .listObservations(this.homeId, 0, MAX_OBSERVATIONS)
+      .filter(
+        (observation) => observation.operationId === request.operationId && observation.kind === "read",
+      ).length;
+
+    await this.barrier("tool.read.before");
+    const snapshot = this.store.getOperation(request.operationId);
+    const attempt = priorAttempts + 1;
+    this.recordObservation("read", request.operationId, {
+      tool: request.tool,
+      category: declaration.category,
+      replay: declaration.replay,
+      attempt,
+    });
+    await this.barrier("tool.read.after");
+
+    return {
+      operationId: request.operationId,
+      tool: request.tool as ReadToolName,
+      category: declaration.category,
+      replay: declaration.replay,
+      attempt,
+      replayed: priorAttempts > 0,
+      snapshot: snapshot as unknown as JsonValue,
+    };
   }
 
   /**

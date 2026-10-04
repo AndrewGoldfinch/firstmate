@@ -12,6 +12,7 @@ import {
   type CancelResult,
   type CancelScope,
   type DispatchResult,
+  type ReadToolResult,
   type SidecarRequest,
   type SidecarResponse,
 } from "./protocol.ts";
@@ -120,6 +121,20 @@ export class SidecarClient implements DispatchTransport {
     if (!response.ok) {
       throw new Error(`sidecar refused the outcome receipt: ${response.error.code}`);
     }
+  }
+
+  /** Invoke one declared read tool under this client's authority binding. */
+  async readTool(operationId: string, tool: string): Promise<ReadToolResult> {
+    const response = await sidecarRequest(this.options.socketPath, {
+      ...this.authority(),
+      op: "readTool",
+      operationId,
+      tool,
+    });
+    if (!response.ok) {
+      throw new Error(`sidecar refused read tool ${tool}: ${response.error.code}`);
+    }
+    return response.result as ReadToolResult;
   }
 
   /** Persist cancellation intent and request runtime abort for one operation. */

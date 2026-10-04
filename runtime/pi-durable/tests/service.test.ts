@@ -180,7 +180,7 @@ test("cancellation persists intent before abort and retains the records", async 
         state: string;
         intentPersisted: boolean;
         unresolved: string[];
-        retained: { operation: boolean; outcomesUntouched: boolean };
+        retained: { operation: boolean; observations: number; outcomesUntouched: boolean };
       })
     : null;
   assert.equal(result?.intentPersisted, true);
@@ -229,4 +229,61 @@ test("cancellation persists intent before abort and retains the records", async 
   });
   assert.equal(redispatch.ok, false);
   assert.equal(redispatch.ok ? "" : redispatch.error.code, "RECONCILE_REQUIRED");
+});
+
+test("a declared read tool may rerun and an undeclared one is refused", async () => {
+  const home = tempHome();
+  const sidecar = await start(home);
+  const ensured = await call(
+    sidecar.socketPath,
+    ensureSupervisorRequest({ homeId: sidecar.homeId, cwd: home }),
+  );
+  assert.equal(ensured.ok, true);
+
+  const authority = {
+    protocolVersion: PROTOCOL_VERSION,
+    homeId: sidecar.homeId,
+    supervisorId: "pi-supervisor",
+    capabilityProfile: "supervision-observe-v1",
+    ownerGeneration: 1,
+    wakeClaimId: "claim-1",
+    rowIds: [],
+  };
+
+  const first = await call(sidecar.socketPath, {
+    ...authority,
+    op: "readTool",
+    operationId: "op-read",
+    tool: "operation-snapshot",
+  });
+  assert.equal(first.ok, true);
+  const firstResult = first.ok
+    ? (first.result as { replay: string; attempt: number; replayed: boolean })
+    : null;
+  assert.equal(firstResult?.replay, "safe");
+  assert.equal(firstResult?.attempt, 1);
+  assert.equal(firstResult?.replayed, false);
+
+  const second = await call(sidecar.socketPath, {
+    ...authority,
+    op: "readTool",
+    operationId: "op-read",
+    tool: "operation-snapshot",
+  });
+  assert.equal(second.ok, true);
+  const secondResult = second.ok
+    ? (second.result as { attempt: number; replayed: boolean; snapshot: unknown })
+    : null;
+  assert.equal(secondResult?.attempt, 2);
+  assert.equal(secondResult?.replayed, true);
+  assert.equal(secondResult?.snapshot, null);
+
+  const undeclared = await call(sidecar.socketPath, {
+    ...authority,
+    op: "readTool",
+    operationId: "op-read",
+    tool: "arbitrary-shell",
+  });
+  assert.equal(undeclared.ok, false);
+  assert.equal(undeclared.ok ? "" : undeclared.error.code, "CAPABILITY_UNKNOWN");
 });

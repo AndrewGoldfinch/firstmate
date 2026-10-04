@@ -261,6 +261,55 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
     });
   }
 
+  // F05 - during a declared safe read: the read may rerun, and the rerun returns
+  // the same snapshot with no side effect.
+  {
+    const home = caseHome(context, "F05");
+    const { sidecar, faux, model } = await startSidecar(home, "tool.read.after");
+    await ensure(sidecar, model);
+    const client = clientFor(sidecar);
+    await dispatch(sidecar, home, faux, "op-F05-seed", context.outcomeScript);
+
+    let crashed = false;
+    try {
+      await client.readTool("op-F05-seed", "operation-snapshot");
+    } catch {
+      crashed = true;
+    }
+    const rerun = await client.readTool("op-F05-seed", "operation-snapshot");
+    const inspected = await inspect(sidecar, "op-F05-seed");
+    let undeclared = "none";
+    try {
+      await client.readTool("op-F05-seed", "arbitrary-shell");
+    } catch (error) {
+      undeclared = (error as Error).message.includes("CAPABILITY_UNKNOWN")
+        ? "CAPABILITY_UNKNOWN"
+        : "other";
+    }
+    const kinds = await observationKinds(sidecar, "op-F05-seed");
+    const outcomes = await readOutcomes(context.outcomeScript, home);
+    await sidecar.stop();
+    const inspectedRecord = inspected.ok
+      ? (inspected.result as { record: unknown }).record
+      : undefined;
+    results.push({
+      id: "F05",
+      title: "during a declared safe read",
+      status:
+        crashed &&
+        rerun.replay === "safe" &&
+        rerun.replayed === true &&
+        rerun.attempt === 2 &&
+        JSON.stringify(rerun.snapshot) === JSON.stringify(inspectedRecord) &&
+        kinds.filter((kind) => kind === "read").length === 2 &&
+        outcomes.length === 1 &&
+        undeclared === "CAPABILITY_UNKNOWN"
+          ? "pass"
+          : "fail",
+      detail: `crashed=${crashed} replay=${rerun.replay} reran=${rerun.replayed} attempt=${rerun.attempt} stable=${JSON.stringify(rerun.snapshot) === JSON.stringify(inspectedRecord)} readRecords=${kinds.filter((kind) => kind === "read").length} outcomes=${outcomes.length} undeclaredTool=${undeclared}`,
+    });
+  }
+
   // F06 - after the outcome effect, before the adapter receipt: reconcile the
   // missing receipt through the sink read-back, and keep refusing a blind
   // append when the sink cannot read back.
@@ -595,7 +644,6 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
 
   // Explicitly not covered in this environment.
   const notCovered: [string, string, string][] = [
-    ["F05", "during a declared safe read", "the prototype has no read-tool boundary to rerun"],
     ["F09", "after delivery, before acknowledgement", "the existing routine-note delivery limitation is documented, not re-tested here"],
     ["F11", "service crash with valid generation", "covered by F02/F04 recovery; a real process crash needs the VM lane"],
     ["F16", "missing credentials or incompatible dependency", "a real credential provider is unavailable; the unknown-capability refusal is covered by the P1B suite"],
