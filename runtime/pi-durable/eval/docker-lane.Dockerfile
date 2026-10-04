@@ -1,4 +1,4 @@
-# Disposable-container restart lane image.
+# Disposable-container teardown lane image.
 #
 # `node:22` provides the runtime and its type stripping; `jq` is required because
 # the outcome store validates every row with jq before it will read or append.
