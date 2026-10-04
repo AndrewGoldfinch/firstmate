@@ -154,10 +154,20 @@ KILLED="$killed" \
 BUILD_COMMAND="$build_command" \
 SERVE_COMMAND="${serve_cmd[*]}" \
 VERIFY_COMMAND="${verify_cmd[*]}" \
+WORKDIR="$workdir" \
+CONTAINER_NAME="$name" \
 OUT="$OUT" \
 node -e '
   const serve = JSON.parse(process.env.SERVE_STATE);
   const verify = JSON.parse(process.env.VERIFY_RESULT);
+  // Keep the recorded commands reproducible: the per-run temp home and
+  // container name are placeholders, not evidence.
+  const sanitize = (command) =>
+    command
+      .split(process.env.WORKDIR)
+      .join("<workdir>")
+      .split(process.env.CONTAINER_NAME)
+      .join("<lane>");
   const f11 = serve.generation === 1 && typeof serve.seq === "number" && process.env.KILLED === "true";
   const f17 =
     verify.storePath !== null &&
@@ -176,7 +186,9 @@ node -e '
       process.env.BUILD_COMMAND,
       process.env.SERVE_COMMAND,
       process.env.VERIFY_COMMAND,
-    ].filter(Boolean),
+    ]
+      .filter(Boolean)
+      .map(sanitize),
     f11: {
       status: f11 ? "pass" : "fail",
       case: "service crash with a valid generation",

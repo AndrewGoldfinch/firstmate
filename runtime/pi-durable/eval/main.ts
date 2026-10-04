@@ -17,6 +17,7 @@ import { grade, negativeControls, type GradeResult } from "./grader.ts";
 import { runMatrix, type MatrixCaseResult } from "./matrix.ts";
 import { runDockerLane, type DockerLaneResult } from "./docker-lane.ts";
 import { runPilot, type PilotResult } from "./pilot.ts";
+import { runCalibration, type CalibrationResult } from "./calibrate.ts";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const outcomeScript = join(repoRoot, "bin", "fm-branch-outcome.sh");
@@ -42,6 +43,7 @@ export type EvaluationResults = {
   matrix: MatrixCaseResult[];
   dockerLane: DockerLaneResult;
   pilot: PilotResult;
+  calibration: CalibrationResult;
 };
 
 export async function runEvaluation(workDir = mkdtempSync(join(tmpdir(), "fm-pi-durable-eval-"))): Promise<EvaluationResults> {
@@ -89,17 +91,19 @@ export async function runEvaluation(workDir = mkdtempSync(join(tmpdir(), "fm-pi-
   const negative = negativeControls(FLEET, durable.trace);
   const dockerLane = await runDockerLane();
   const pilot = await runPilot(workDir, outcomeScript);
+  const calibration = await runCalibration(workDir, outcomeScript);
   const matrix = await runMatrix({ workDir, outcomeScript, dockerLane, pilot });
 
   return {
     generatedAt: new Date().toISOString(),
-    environment: `Node ${process.version}; local Linux host; deterministic faux model for the arms; disposable-container restart lane for the process-crash and reboot boundaries`,
+    environment: `Node ${process.version}; local Linux host; deterministic faux model for both arms; disposable-container restart lane for the process-crash and reboot boundaries; bounded real-model pilot when a provider credential is reachable`,
     arms: { existing, "pi-durable": durable, existingWithFault, "pi-durableWithFault": durableWithFault },
     grades,
     negativeControls: negative,
     matrix,
     dockerLane,
     pilot,
+    calibration,
   };
 }
 
@@ -188,7 +192,7 @@ export function renderReport(results: EvaluationResults): string {
     }
   }
   lines.push("");
-  lines.push("## Benefit scorecard (deterministic, provisional)");
+  lines.push("## Benefit scorecard (deterministic, calibrated)");
   lines.push("");
   lines.push("| Benefit | Metric | Arm A | Arm B | Status |");
   lines.push("| --- | --- | --- | --- | --- |");
@@ -205,8 +209,38 @@ export function renderReport(results: EvaluationResults): string {
     `| Useful visibility | Recoverable settlements | n/a | ${results.arms["pi-durable"].trace.operations.filter((operation) => operation.state === "settled").length} | pass |`,
   );
   lines.push(
-    `| Reduced recovery burden | Manual recovery actions on the faulted fleet | ${results.arms.existingWithFault.faults.length} | ${results.arms["pi-durableWithFault"].faults.length} | ${results.arms["pi-durableWithFault"].faults.length <= results.arms.existingWithFault.faults.length ? "not worse" : "unproven"} |`,
+    `| Reduced recovery burden | Manual recovery actions on the faulted fleet | ${results.arms.existingWithFault.faults.length} | ${results.arms["pi-durableWithFault"].faults.length} | ${results.calibration.verdicts.manualActions} |`,
   );
+  lines.push(
+    `| Faster recovery | Median faulted-scenario time (ms) | ${Math.round(results.calibration.medians.existingWithFault)} | ${Math.round(results.calibration.medians.piDurableWithFault)} | ${results.calibration.verdicts.recoveryTime} |`,
+  );
+  lines.push("");
+  lines.push("## Threshold calibration");
+  lines.push("");
+  lines.push(
+    `Status: ${results.calibration.status}${results.calibration.reason ? ` (${results.calibration.reason})` : ` over ${results.calibration.runs} deterministic runs`}.`,
+  );
+  lines.push(
+    `Median scenario time (ms): arm A ${Math.round(results.calibration.medians.existing)}, arm B ${Math.round(results.calibration.medians.piDurable)}, arm A faulted ${Math.round(results.calibration.medians.existingWithFault)}, arm B faulted ${Math.round(results.calibration.medians.piDurableWithFault)}.`,
+  );
+  lines.push(
+    `Calibrated thresholds: at least ${results.calibration.thresholds.manualActionReductionPercent}% fewer manual recovery actions, at least ${results.calibration.thresholds.recoveryTimeReductionPercent}% lower median faulted-scenario time, and healthy-scenario time within ${results.calibration.thresholds.healthyLatencyTolerancePercent}% of baseline.`,
+  );
+  lines.push(
+    `Measured noise floor: ${results.calibration.thresholds.noiseFloorPercent}% of the faulted baseline median.`,
+  );
+  lines.push(`Basis: ${results.calibration.thresholds.basis}.`);
+  lines.push(
+    `Verdicts: manual recovery actions ${results.calibration.verdicts.manualActions}, recovery time ${results.calibration.verdicts.recoveryTime}, duplicate outcomes ${results.calibration.verdicts.duplicateOutcomes}.`,
+  );
+  lines.push("");
+  lines.push("| Run | Arm A (ms) | Arm B (ms) | Arm A faulted (ms) | Arm B faulted (ms) |");
+  lines.push("| --- | --- | --- | --- | --- |");
+  for (const sample of results.calibration.samples) {
+    lines.push(
+      `| ${sample.run} | ${Math.round(sample.existingMs)} | ${Math.round(sample.durableMs)} | ${Math.round(sample.existingWithFaultMs)} | ${Math.round(sample.durableWithFaultMs)} |`,
+    );
+  }
   lines.push("");
   lines.push("## Raw evidence");
   lines.push("");
@@ -225,7 +259,7 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("- The real-model pilot asks one shared set of model answers and replays them through both arms, so it isolates execution durability rather than measuring per-arm model variance; independent per-arm model calls remain the fuller form the design describes.");
   lines.push("- The pilot drives the pinned provider directly because the durable conversation seam does not carry the session-affinity header the provider requires, so it does not exercise the prototype's execution seam end to end.");
   lines.push("- Token and cost comparison and the operator diagnosis study from the design remain out of scope for this pass.");
-  lines.push("- The improvement thresholds are not calibrated here; the deterministic runs are a conformance pilot, not evidence of a performance difference.");
+  lines.push("- The calibrated thresholds are derived from this lab's own run-to-run spread, and the deterministic arms are byte-identical workloads, so a measured recovery-time improvement would have to exceed several times the noise floor before it counts as proven.");
   lines.push("");
   return lines.join("\n");
 }

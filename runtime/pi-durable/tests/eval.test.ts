@@ -18,6 +18,7 @@ const workDirs: string[] = [];
 // daemon and of a reachable provider credential.
 process.env.FM_PI_DURABLE_SKIP_DOCKER = "1";
 process.env.FM_PI_DURABLE_SKIP_PILOT = "1";
+process.env.FM_PI_DURABLE_CALIBRATION_RUNS = "2";
 
 after(() => {
   for (const dir of workDirs) rmSync(dir, { recursive: true, force: true });
@@ -52,4 +53,7 @@ test("the deterministic harness grades both arms and rejects every corrupted tra
   assert.ok(results.matrix.some((caseResult) => caseResult.status === "not-covered"));
   assert.equal(results.dockerLane.status, "not-covered");
   assert.equal(results.pilot.status, "not-covered");
+  assert.equal(results.calibration.status, "pass");
+  assert.equal(results.calibration.samples.length, 2);
+  assert.ok(results.calibration.thresholds.recoveryTimeReductionPercent >= 30);
 });
