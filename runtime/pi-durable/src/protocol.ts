@@ -42,6 +42,8 @@ export type OperationName =
   | "ensureSupervisor"
   | "submit"
   | "inspect"
+  | "dispatch"
+  | "receipt"
   | "resume"
   | "shutdown";
 
@@ -50,6 +52,8 @@ export const OPERATION_NAMES: readonly OperationName[] = [
   "ensureSupervisor",
   "submit",
   "inspect",
+  "dispatch",
+  "receipt",
   "resume",
   "shutdown",
 ];
@@ -95,6 +99,7 @@ export type ErrorCode =
   | "CAPABILITY_UNKNOWN"
   | "CWD_INVALID"
   | "CONFIG_CONFLICT"
+  | "RECONCILE_REQUIRED"
   | "AUTHORITY_UNKNOWN"
   | "AUTHORITY_STALE"
   | "AUTHORITY_CONFLICT"
@@ -160,6 +165,25 @@ export type InspectRequest = BaseRequest & {
   operationId: string;
 };
 
+/** Execute one accepted supervision operation and return its candidate result. */
+export type DispatchRequest = BaseRequest &
+  AuthorityBinding & {
+    op: "dispatch";
+    supervisorId: string;
+    capabilityProfile: string;
+    operationId: string;
+    prompt: string;
+    payload: JsonValue;
+    payloadDigest?: string;
+  };
+
+/** Record the mirrored delivery receipt (outcome sequence) for an operation. */
+export type ReceiptRequest = BaseRequest & {
+  op: "receipt";
+  operationId: string;
+  seq: number;
+};
+
 export type ResumeRequest = BaseRequest &
   AuthorityBinding & {
     op: "resume";
@@ -174,6 +198,8 @@ export type SidecarRequest =
   | EnsureSupervisorRequest
   | SubmitRequest
   | InspectRequest
+  | DispatchRequest
+  | ReceiptRequest
   | ResumeRequest
   | ShutdownRequest;
 
@@ -181,12 +207,14 @@ export type OperationRecord = {
   operationId: string;
   homeId: string;
   supervisorId: string;
-  state: "accepted";
+  state: "accepted" | "settled";
   payloadDigest: string;
   configDigest: string;
   rowIds: string[];
   ownerGeneration: number | null;
   wakeClaimId: string | null;
+  result: JsonValue;
+  receipt: { seq: number } | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -233,6 +261,14 @@ export type SubmitResult = {
 
 export type InspectResult = { record: OperationRecord | null };
 
+export type DispatchResult = {
+  record: OperationRecord;
+  result: JsonValue;
+  replayed: boolean;
+};
+
+export type ReceiptResult = { recorded: true };
+
 export type ResumeResult = { resumed: true; generation: number };
 
 export type SidecarResult =
@@ -240,6 +276,8 @@ export type SidecarResult =
   | EnsureSupervisorResult
   | SubmitResult
   | InspectResult
+  | DispatchResult
+  | ReceiptResult
   | ResumeResult
   | { stopped: true };
 
@@ -407,6 +445,30 @@ export function parseRequest(raw: unknown): SidecarRequest {
       };
     case "inspect":
       return { ...base, op: "inspect", operationId: asString(source, "operationId") };
+    case "dispatch": {
+      const payloadDigest = optionalString(source, "payloadDigest");
+      if (payloadDigest !== undefined && !isDigest(payloadDigest)) {
+        fail("BAD_REQUEST", "payloadDigest must be a lowercase SHA-256 hex digest");
+      }
+      return {
+        ...base,
+        ...parseAuthority(source),
+        op: "dispatch",
+        supervisorId: asString(source, "supervisorId"),
+        capabilityProfile: parseCapabilityProfile(source),
+        operationId: asString(source, "operationId"),
+        prompt: asString(source, "prompt"),
+        payload: requireJson(source, "payload"),
+        ...(payloadDigest !== undefined ? { payloadDigest } : {}),
+      };
+    }
+    case "receipt":
+      return {
+        ...base,
+        op: "receipt",
+        operationId: asString(source, "operationId"),
+        seq: parseGeneration(source, "seq"),
+      };
     case "resume":
       return {
         ...base,

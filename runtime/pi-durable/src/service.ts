@@ -18,7 +18,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { OwnerLock } from "./lock.ts";
 import { OperationStore } from "./store.ts";
-import { DurableProvider, dependencyVersions } from "./provider.ts";
+import { DurableProvider, dependencyVersions, type ModelConfigurer } from "./provider.ts";
 import {
   DEFAULT_MAX_MESSAGE_BYTES,
   DEFAULT_MAX_OUTSTANDING,
@@ -30,9 +30,11 @@ import {
   parseRequest,
   pinnedConfigDigest,
   type AuthorityBinding,
+  type DispatchRequest,
   type EnsureSupervisorRequest,
   type HealthResult,
   type OperationRecord,
+  type ReceiptRequest,
   type ResumeRequest,
   type SidecarRequest,
   type SidecarResponse,
@@ -52,6 +54,8 @@ export type SidecarOptions = {
   logger?: (line: string) => void;
   maxMessageBytes?: number;
   maxOutstanding?: number;
+  /** Register model providers before any supervision execution. */
+  configureModels?: ModelConfigurer;
   now?: () => number;
 };
 
@@ -129,7 +133,10 @@ export class DurableSidecar {
     let server: Server | null = null;
     try {
       store = new OperationStore(storePath);
-      provider = new DurableProvider({ storePath: runtimeStorePath });
+      provider = new DurableProvider({
+        storePath: runtimeStorePath,
+        ...(options.configureModels ? { configureModels: options.configureModels } : {}),
+      });
 
       // The lock proves no live owner exists, so a leftover socket is stale.
       try {
@@ -257,6 +264,10 @@ export class DurableSidecar {
         return this.submit(request);
       case "inspect":
         return { record: this.store.getOperation(request.operationId) };
+      case "dispatch":
+        return this.dispatchOperation(request);
+      case "receipt":
+        return this.receipt(request);
       case "resume":
         return this.resume(request);
       case "shutdown": {
@@ -353,10 +364,12 @@ export class DurableSidecar {
   }
 
   /**
-   * Guarded mutation: resume unfinished execution only under current authority.
-   * The authority check runs before the resume call.
+   * Resolve and validate the recorded authority for a guarded operation. The
+   * check runs before any effect, and again at every guarded boundary.
    */
-  private async resume(request: ResumeRequest) {
+  private authorize(
+    request: { supervisorId: string; capabilityProfile: string } & AuthorityBinding,
+  ): SupervisorBinding {
     const existing = this.store.getSupervisorBinding(this.homeId, request.supervisorId);
     if (!existing) {
       throw new ProtocolError("AUTHORITY_UNKNOWN", "no recorded authority for this supervisor");
@@ -379,8 +392,82 @@ export class DurableSidecar {
     if (!rowSubset(request.rowIds, existing.rowIds)) {
       throw new ProtocolError("AUTHORITY_SCOPE", "requested rows are outside the recorded claim scope");
     }
+    return existing;
+  }
+
+  /**
+   * Guarded mutation: resume unfinished execution only under current authority.
+   * The authority check runs before the resume call.
+   */
+  private async resume(request: ResumeRequest) {
+    const existing = this.authorize(request);
     await this.provider.resume();
     return { resumed: true as const, generation: existing.generation };
+  }
+
+  /**
+   * Execute one accepted supervision operation under current authority and
+   * return its candidate result. A settled repeat returns the original result;
+   * an accepted-but-unsettled repeat requires reconciliation.
+   */
+  private async dispatchOperation(request: DispatchRequest) {
+    const binding = this.authorize(request);
+    const payloadDigest = digestOf(request.payload);
+    if (request.payloadDigest !== undefined && request.payloadDigest !== payloadDigest) {
+      throw new ProtocolError("DIGEST_MISMATCH", "payloadDigest does not match the submitted payload");
+    }
+
+    const existing = this.store.getOperation(request.operationId);
+    if (existing) {
+      if (existing.supervisorId !== request.supervisorId || existing.payloadDigest !== payloadDigest) {
+        throw new ProtocolError("CONFLICT", "operation ID already accepted with a different payload");
+      }
+      if (existing.state !== "settled") {
+        throw new ProtocolError(
+          "RECONCILE_REQUIRED",
+          "operation was accepted but not settled; reconcile before retrying",
+        );
+      }
+      return { record: existing, result: existing.result, replayed: true };
+    }
+
+    const at = this.now();
+    const record: OperationRecord = {
+      operationId: request.operationId,
+      homeId: this.homeId,
+      supervisorId: request.supervisorId,
+      state: "accepted",
+      payloadDigest,
+      configDigest: binding.configDigest,
+      rowIds: request.rowIds,
+      ownerGeneration: request.ownerGeneration,
+      wakeClaimId: request.wakeClaimId,
+      result: null,
+      receipt: null,
+      createdAt: at,
+      updatedAt: at,
+    };
+    this.store.insertOperation(record);
+    const result = await this.provider.runSupervision({
+      conversationId: binding.conversationId,
+      prompt: request.prompt,
+    });
+    this.store.settleOperation(request.operationId, result, this.now());
+    const settled = this.store.getOperation(request.operationId) ?? record;
+    return { record: settled, result, replayed: false };
+  }
+
+  /** Record the mirrored outcome receipt for an operation. Idempotent. */
+  private receipt(request: ReceiptRequest) {
+    const existing = this.store.getOperation(request.operationId);
+    if (!existing) {
+      throw new ProtocolError("NOT_FOUND", "unknown operation");
+    }
+    if (existing.receipt && existing.receipt.seq !== request.seq) {
+      throw new ProtocolError("CONFLICT", "operation already has a different outcome receipt");
+    }
+    this.store.recordReceipt(request.operationId, request.seq, this.now());
+    return { recorded: true as const };
   }
 
   private submit(request: SubmitInput): SubmitResult {
@@ -419,6 +506,8 @@ export class DurableSidecar {
       rowIds: request.rowIds ?? [],
       ownerGeneration: request.ownerGeneration ?? null,
       wakeClaimId: request.wakeClaimId ?? null,
+      result: null,
+      receipt: null,
       createdAt: at,
       updatedAt: at,
     };

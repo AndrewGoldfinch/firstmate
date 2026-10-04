@@ -25,6 +25,8 @@ type OperationRow = {
   row_ids_json: string;
   owner_generation: number | null;
   wake_claim_id: string | null;
+  result_json: string | null;
+  receipt_json: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -48,12 +50,14 @@ function toRecord(row: OperationRow): OperationRecord {
     operationId: row.operation_id,
     homeId: row.home_id,
     supervisorId: row.supervisor_id,
-    state: "accepted",
+    state: row.state === "settled" ? "settled" : "accepted",
     payloadDigest: row.payload_digest,
     configDigest: row.config_digest,
     rowIds: JSON.parse(row.row_ids_json) as string[],
     ownerGeneration: row.owner_generation,
     wakeClaimId: row.wake_claim_id,
+    result: row.result_json === null ? null : (JSON.parse(row.result_json) as JsonValue),
+    receipt: row.receipt_json === null ? null : (JSON.parse(row.receipt_json) as { seq: number }),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -95,6 +99,8 @@ export class OperationStore {
         row_ids_json TEXT NOT NULL,
         owner_generation INTEGER,
         wake_claim_id TEXT,
+        result_json TEXT,
+        receipt_json TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -114,6 +120,21 @@ export class OperationStore {
       );
     `);
     this.migrateSupervisors();
+    this.migrateOperations();
+  }
+
+  /** Add P1C columns to an operations table created by an earlier version. */
+  private migrateOperations(): void {
+    const columns = new Set(
+      (this.db.prepare("PRAGMA table_info(operations)").all() as { name: string }[]).map(
+        (row) => row.name,
+      ),
+    );
+    for (const name of ["result_json", "receipt_json"]) {
+      if (!columns.has(name)) {
+        this.db.exec(`ALTER TABLE operations ADD COLUMN ${name} TEXT`);
+      }
+    }
   }
 
   /** Add P1B columns to a supervisors table created by an earlier version. */
@@ -173,6 +194,20 @@ export class OperationStore {
   countOperations(): number {
     const row = this.db.prepare("SELECT COUNT(*) AS n FROM operations").get() as { n: number };
     return row.n;
+  }
+
+  /** Mark an operation settled with its candidate result. */
+  settleOperation(operationId: string, result: JsonValue, at: number): void {
+    this.db
+      .prepare("UPDATE operations SET state = 'settled', result_json = ?, updated_at = ? WHERE operation_id = ?")
+      .run(JSON.stringify(result), at, operationId);
+  }
+
+  /** Record the mirrored outcome receipt for an operation. */
+  recordReceipt(operationId: string, seq: number, at: number): void {
+    this.db
+      .prepare("UPDATE operations SET receipt_json = ?, updated_at = ? WHERE operation_id = ?")
+      .run(JSON.stringify({ seq }), at, operationId);
   }
 
   getSupervisorBinding(homeId: string, supervisorId: string): SupervisorBinding | null {

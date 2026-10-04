@@ -9,7 +9,7 @@
  */
 
 import { createRequire } from "node:module";
-import { createModels } from "@earendil-works/pi-ai";
+import { createModels, type MutableModels } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -39,20 +39,51 @@ export function dependencyVersions(): Record<string, string> {
 export type DurableProviderOptions = {
   /** Path to the upstream Durable SQLite conversation store. */
   storePath: string;
+  /** Register model providers before any execution. Absent means none. */
+  configureModels?: (models: MutableModels) => void;
 };
+
+/** A model-provider configurer, re-exported so the service stays upstream-free. */
+export type ModelConfigurer = NonNullable<DurableProviderOptions["configureModels"]>;
 
 export type EnsureConversationResult = {
   conversationId: string;
   created: boolean;
 };
 
+export type RunSupervisionInput = {
+  conversationId: string;
+  prompt: string;
+};
+
+type EntryRecordLike = {
+  id?: unknown;
+  model?: unknown;
+};
+
+function assistantText(entry: EntryRecordLike | undefined): string {
+  const model = entry?.model;
+  if (!Array.isArray(model)) return "";
+  const first = model[0] as { content?: unknown } | undefined;
+  const content = first?.content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      const typed = part as { type?: unknown; text?: unknown };
+      return typed.type === "text" && typeof typed.text === "string" ? typed.text : "";
+    })
+    .join("");
+}
+
 export class DurableProvider {
   readonly storePath: string;
+  private readonly configureModels?: (models: MutableModels) => void;
   private harness: Harness | null = null;
   private opening: Promise<Harness> | null = null;
 
   constructor(options: DurableProviderOptions) {
     this.storePath = options.storePath;
+    this.configureModels = options.configureModels;
   }
 
   private async openHarness(): Promise<Harness> {
@@ -60,9 +91,11 @@ export class DurableProvider {
     if (!this.opening) {
       this.opening = (async () => {
         const storage = await openNodeSqliteStorage(this.storePath);
+        const models = createModels();
+        this.configureModels?.(models);
         const harness = await Harness.open(
           storage,
-          { models: createModels(), registry: createRegistry() },
+          { models, registry: createRegistry() },
           BACKGROUND_CONTEXT,
         );
         this.harness = harness;
@@ -123,6 +156,40 @@ export class DurableProvider {
     const state = await conversation.viewState(BACKGROUND_CONTEXT);
     const docs = (state as unknown as { value: { docs?: Record<string, JsonValue> } }).value?.docs;
     return docs?.["pi.agent"] ?? null;
+  }
+
+  /**
+   * Run one supervision prompt on the pinned conversation and return the
+   * parsed JSON of its settled assistant answer.
+   */
+  async runSupervision(input: RunSupervisionInput): Promise<JsonValue> {
+    const harness = await this.openHarness();
+    const conversation: Conversation | undefined = await harness.conversation(
+      input.conversationId as never,
+      BACKGROUND_CONTEXT,
+    );
+    if (!conversation) {
+      throw new Error(`supervision conversation ${input.conversationId} was not found`);
+    }
+    const submission = await conversation.submit(
+      { type: "input", content: input.prompt },
+      BACKGROUND_CONTEXT,
+    );
+    const settled = await submission.wait(BACKGROUND_CONTEXT);
+    if (settled.status !== "done" || settled.type !== "input") {
+      const reason = (settled as { reason?: string }).reason;
+      throw new Error(`supervision submission did not settle done (${settled.status}${reason ? `: ${reason}` : ""})`);
+    }
+    const state = await conversation.viewState(BACKGROUND_CONTEXT);
+    const entries = (state as unknown as { value: { entries?: EntryRecordLike[] } }).value?.entries ?? [];
+    const answerId = (settled as { answer?: unknown }).answer;
+    const entry = entries.find((candidate) => candidate.id === answerId);
+    const text = assistantText(entry);
+    try {
+      return JSON.parse(text) as JsonValue;
+    } catch {
+      throw new Error("supervision answer was not valid JSON");
+    }
   }
 
   /** Resume any run the previous process left unfinished. Harness-wide. */

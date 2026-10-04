@@ -66,3 +66,25 @@ export function submitRequest(
     ...(config !== undefined ? { config } : {}),
   };
 }
+
+export function dispatchRequest(
+  input: SupervisorInput & { operationId: string; prompt: string; payload: unknown },
+) {
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    homeId: input.homeId,
+    op: "dispatch",
+    supervisorId: input.supervisorId ?? "pi-supervisor",
+    ownerGeneration: input.generation ?? 1,
+    wakeClaimId: input.wakeClaimId ?? "claim-1",
+    rowIds: input.rowIds ?? [],
+    capabilityProfile: input.capabilityProfile ?? "supervision-observe-v1",
+    operationId: input.operationId,
+    prompt: input.prompt,
+    payload: input.payload,
+  };
+}
+
+export function receiptRequest(homeId: string, operationId: string, seq: number) {
+  return { protocolVersion: PROTOCOL_VERSION, homeId, op: "receipt", operationId, seq };
+}
