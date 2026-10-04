@@ -5,15 +5,48 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, test } from "node:test";
-import { OwnerConflictError, OwnerLock, writeLockFile } from "../src/lock.ts";
+import { INVALID_LOCK_GRACE_MS, OwnerConflictError, OwnerLock, writeLockFile } from "../src/lock.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "fm-pi-durable-lock-"));
 const holdLock = fileURLToPath(new URL("./helpers/hold-lock.ts", import.meta.url));
+
+/**
+ * Start `count` hold-lock children at once and report each outcome. A child
+ * that acquires prints `locked` and stays alive; the others exit refused. Any
+ * survivor is killed once every child has answered, so exactly one `locked`
+ * outcome proves a single winner across the whole race.
+ */
+async function raceHoldLock(path: string, count: number): Promise<string[]> {
+  const children = Array.from({ length: count }, () =>
+    spawn(process.execPath, [holdLock, path, "/home/a"], { stdio: ["ignore", "pipe", "pipe"] }),
+  );
+  const outcomes = await Promise.all(
+    children.map(
+      (child) =>
+        new Promise<string>((resolve) => {
+          let locked = false;
+          child.stdout.setEncoding("utf8");
+          child.stdout.on("data", (chunk: string) => {
+            if (chunk.includes("locked")) {
+              locked = true;
+              resolve("locked");
+            }
+          });
+          child.on("error", () => resolve("error"));
+          child.on("exit", (code) => resolve(locked ? "locked" : code === 0 ? "exited" : "refused"));
+        }),
+    ),
+  );
+  const survivors = children.filter((child) => child.exitCode === null);
+  for (const child of survivors) child.kill("SIGTERM");
+  await Promise.all(survivors.map((child) => new Promise<void>((resolve) => child.on("exit", () => resolve()))));
+  return outcomes;
+}
 
 after(() => {
   rmSync(scratch, { recursive: true, force: true });
@@ -76,6 +109,37 @@ test("a live owner in another OS process is refused", async () => {
   }
 
   // The child released on SIGTERM, so the parent can now acquire.
+  const lock = OwnerLock.acquire(path, "/home/a");
+  lock.release();
+});
+
+test("simultaneous starts produce exactly one owner", async () => {
+  const path = join(scratch, "simultaneous-start.lock");
+  const outcomes = await raceHoldLock(path, 8);
+  assert.equal(outcomes.filter((outcome) => outcome === "locked").length, 1, outcomes.join(","));
+  // The winner was killed rather than released; its dead pid is reclaimed.
+  const lock = OwnerLock.acquire(path, "/home/a");
+  lock.release();
+});
+
+test("simultaneous stale reclaims produce exactly one owner", async () => {
+  const path = join(scratch, "simultaneous-reclaim.lock");
+  writeLockFile(path, { homeId: "/home/a", pid: 0, startedAt: 0 });
+  const outcomes = await raceHoldLock(path, 8);
+  assert.equal(outcomes.filter((outcome) => outcome === "locked").length, 1, outcomes.join(","));
+  const lock = OwnerLock.acquire(path, "/home/a");
+  lock.release();
+});
+
+test("an empty lock is respected while fresh and reclaimed once old", () => {
+  const path = join(scratch, "empty.lock");
+  writeFileSync(path, "");
+  assert.throws(
+    () => OwnerLock.acquire(path, "/home/a"),
+    (error: unknown) => error instanceof OwnerConflictError,
+  );
+  const old = new Date(Date.now() - INVALID_LOCK_GRACE_MS - 1_000);
+  utimesSync(path, old, old);
   const lock = OwnerLock.acquire(path, "/home/a");
   lock.release();
 });

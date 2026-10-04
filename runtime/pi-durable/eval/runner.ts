@@ -229,7 +229,7 @@ export async function runExistingScenario(input: ExistingScenarioInput): Promise
       operations.push({ operationId: `existing:${task.id}`, task: task.id, state: "lost", receiptSeq: null });
       continue;
     }
-    await sink.append(respond(task));
+    await sink.appendOrGet(`existing:${task.id}`, respond(task));
     ledger.apply(`outcome:${task.id}`, task.id, "branch");
     operations.push({ operationId: `existing:${task.id}`, task: task.id, state: "settled", receiptSeq: 1 });
   }

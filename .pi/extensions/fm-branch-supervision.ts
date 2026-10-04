@@ -133,6 +133,8 @@ import {
   encodeFirstmateOperationalInputWith,
 } from "./lib/fm-operational-input.ts";
 import {
+  durableWakeOperationId,
+  markDurableWakeCompleted,
   readExecutionProvider,
   runDurableBranch,
   type ExecutionProvider,
@@ -1571,6 +1573,13 @@ ${context.command}
         const wakePrompt = branchWakePrompt(message, "fm_branch_report", postureTail);
         try {
           if (executionProvider() === "pi-durable") {
+            const wakeIdentity = durableWakeOperationId({
+              stateDir: state,
+              homeId: fmHome,
+              generation: acceptedGeneration,
+              wakeClaimId: `gen-${acceptedGeneration}`,
+              rowIds: scope.eligibleSeqs.map(String),
+            });
             await runDurableBranch(durableBridgeCli, {
               socketPath: durableSocketPath,
               homeId: fmHome,
@@ -1579,12 +1588,13 @@ ${context.command}
               ownerGeneration: acceptedGeneration,
               wakeClaimId: `gen-${acceptedGeneration}`,
               rowIds: scope.eligibleSeqs.map(String),
-              operationId: `fm:${fmHome}:supervision:gen-${acceptedGeneration}:${acceptedGeneration}`,
+              operationId: wakeIdentity.operationId,
               prompt: wakePrompt,
               payload: { rows: scope.eligibleSeqs, generation: acceptedGeneration },
               outcomeScript,
             });
             durableReportRevision += 1;
+            markDurableWakeCompleted(state, wakeIdentity.operationId);
           } else {
             await session.prompt(wakePrompt);
           }

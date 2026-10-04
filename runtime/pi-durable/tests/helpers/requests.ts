@@ -86,7 +86,18 @@ export function dispatchRequest(
 }
 
 export function receiptRequest(homeId: string, operationId: string, seq: number) {
-  return { protocolVersion: PROTOCOL_VERSION, homeId, op: "receipt", operationId, seq };
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    homeId,
+    op: "receipt",
+    supervisorId: "pi-supervisor",
+    capabilityProfile: "supervision-observe-v1",
+    ownerGeneration: 1,
+    wakeClaimId: "claim-1",
+    rowIds: [],
+    operationId,
+    seq,
+  };
 }
 
 export function observeRequest(homeId: string, after?: number, limit?: number) {

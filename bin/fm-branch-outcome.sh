@@ -77,8 +77,11 @@
 #
 # Usage:
 #   fm-branch-outcome.sh append --task <id> --verdict routine|captain \
-#       --summary <text> [--wake <text>] [--silent true|false]
-#     Append one outcome record; prints the assigned seq.
+#       --summary <text> [--wake <text>] [--silent true|false] [--operation-key <key>]
+#     Append one outcome record; prints the assigned seq. With an operation
+#     key, the append is an atomic append-or-return-existing: when a row with
+#     the same operationKey is already stored its seq is printed and nothing
+#     new is written, so retrying one operation can never duplicate a row.
 #   fm-branch-outcome.sh unread
 #     Print every unread record (raw JSONL). Exit 0 with no output when none.
 #   fm-branch-outcome.sh mark-read --through <seq>
@@ -163,7 +166,7 @@ RECORDED_AGO_JQ='def recorded_ago: ([$now - .epoch, 0] | max) as $s
     else "\($s / 86400 | floor)d" end;'
 
 usage() {
-  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | startup-replay | seed-tail" >&2
+  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] [--operation-key <key>] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | startup-replay | seed-tail" >&2
   exit 2
 }
 
@@ -236,16 +239,18 @@ last_seq() { # [<file> [<first expected seq, or null for a bounded suffix>]]
   jq -Rse --argjson start "$start" '
     def valid:
       type == "object"
-      and (
-        keys == ["epoch", "seq", "summary", "task", "verdict", "wake"]
-        or (keys == ["epoch", "seq", "silent", "summary", "task", "verdict", "wake"] and (.silent | type) == "boolean")
-        or (
-          keys == ["epoch", "seq", "silent", "statusEndpoint", "statusIdent", "summary", "task", "verdict", "wake"]
-          and (.silent | type) == "boolean"
-          and ((.statusEndpoint | type) == "number" and .statusEndpoint >= 0 and .statusEndpoint <= 9007199254740991 and .statusEndpoint == (.statusEndpoint | floor))
-          and ((.statusIdent | type) == "string" and (.statusIdent | test("[\\t\\n]") | not))
-        )
-      )
+      and ((keys - ["operationKey"] | sort) as $k
+        | (
+            $k == ["epoch", "seq", "summary", "task", "verdict", "wake"]
+            or ($k == ["epoch", "seq", "silent", "summary", "task", "verdict", "wake"] and (.silent | type) == "boolean")
+            or (
+              $k == ["epoch", "seq", "silent", "statusEndpoint", "statusIdent", "summary", "task", "verdict", "wake"]
+              and (.silent | type) == "boolean"
+              and ((.statusEndpoint | type) == "number" and .statusEndpoint >= 0 and .statusEndpoint <= 9007199254740991 and .statusEndpoint == (.statusEndpoint | floor))
+              and ((.statusIdent | type) == "string" and (.statusIdent | test("[\\t\\n]") | not))
+            )
+          ))
+      and ((has("operationKey") | not) or ((.operationKey | type) == "string" and (.operationKey | test("^[^\\t\\n]{1,256}$"))))
       and ((.seq | type) == "number" and .seq >= 1 and .seq <= 9007199254740991 and .seq == (.seq | floor))
       and ((.epoch | type) == "number" and .epoch >= 0 and .epoch == (.epoch | floor))
       and ((.task | type) == "string" and (.wake | type) == "string")
@@ -503,6 +508,7 @@ case "$CMD" in
     SUMMARY=''
     WAKE=''
     SILENT=false
+    OPERATION_KEY=''
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --task) TASK=${2:-}; shift 2 || usage ;;
@@ -510,6 +516,7 @@ case "$CMD" in
         --summary) SUMMARY=${2:-}; shift 2 || usage ;;
         --wake) WAKE=${2:-}; shift 2 || usage ;;
         --silent) SILENT=${2:-}; shift 2 || usage ;;
+        --operation-key) OPERATION_KEY=${2:-}; shift 2 || usage ;;
         *) usage ;;
       esac
     done
@@ -518,6 +525,11 @@ case "$CMD" in
     [ -n "$SUMMARY" ] || usage
     case "$VERDICT" in routine|captain) ;; *) usage ;; esac
     case "$SILENT" in true|false) ;; *) usage ;; esac
+    case "$OPERATION_KEY" in
+      '') ;;
+      *$'\t'*|*$'\n'*) usage ;;
+      *) [ "${#OPERATION_KEY}" -le 256 ] || usage ;;
+    esac
     if [ "$SILENT" = true ] && [ "$VERDICT" != routine ]; then
       echo "error: silent outcomes must have the routine verdict" >&2
       exit 2
@@ -533,13 +545,30 @@ case "$CMD" in
       echo "error: refusing append because the outcome cursor is invalid or ahead of the store" >&2
       exit 1
     fi
+    # Atomic append-or-return-existing under the outcome lock: a second append
+    # of the same operationKey returns the stored copy's seq and writes nothing.
+    if [ -n "$OPERATION_KEY" ] && [ -s "$STORE" ]; then
+      EXISTING_SEQ=$(jq -r --arg key "$OPERATION_KEY" 'select(.operationKey == $key) | .seq' "$STORE" | head -n 1)
+      if [ -n "$EXISTING_SEQ" ]; then
+        fm_lock_release "$LOCK"
+        printf '%s\n' "$EXISTING_SEQ"
+        exit 0
+      fi
+    fi
     SEQ=$(( LAST_SEQ + 1 ))
     capture_status_position "$TASK"
     rm -f -- "$OUTCOME_INDEX_READY" || { fm_lock_release "$LOCK"; exit 1; }
-    printf '{"seq":%s,"epoch":%s,"task":"%s","wake":"%s","verdict":"%s","summary":"%s","silent":%s,"statusEndpoint":%s,"statusIdent":"%s"}\n' \
-      "$SEQ" "$(date +%s)" "$(json_escape "$TASK")" "$(json_escape "$WAKE")" \
-      "$VERDICT" "$(json_escape "$SUMMARY")" "$SILENT" "$CAPTURED_STATUS_ENDPOINT" \
-      "$(json_escape "$CAPTURED_STATUS_IDENT")" >> "$STORE"
+    if [ -n "$OPERATION_KEY" ]; then
+      printf '{"seq":%s,"epoch":%s,"task":"%s","wake":"%s","verdict":"%s","summary":"%s","silent":%s,"statusEndpoint":%s,"statusIdent":"%s","operationKey":"%s"}\n' \
+        "$SEQ" "$(date +%s)" "$(json_escape "$TASK")" "$(json_escape "$WAKE")" \
+        "$VERDICT" "$(json_escape "$SUMMARY")" "$SILENT" "$CAPTURED_STATUS_ENDPOINT" \
+        "$(json_escape "$CAPTURED_STATUS_IDENT")" "$(json_escape "$OPERATION_KEY")" >> "$STORE"
+    else
+      printf '{"seq":%s,"epoch":%s,"task":"%s","wake":"%s","verdict":"%s","summary":"%s","silent":%s,"statusEndpoint":%s,"statusIdent":"%s"}\n' \
+        "$SEQ" "$(date +%s)" "$(json_escape "$TASK")" "$(json_escape "$WAKE")" \
+        "$VERDICT" "$(json_escape "$SUMMARY")" "$SILENT" "$CAPTURED_STATUS_ENDPOINT" \
+        "$(json_escape "$CAPTURED_STATUS_IDENT")" >> "$STORE"
+    fi
     write_outcome_tail || echo "warning: outcome $SEQ was stored but its display tail copy could not be refreshed" >&2
     # A task with neither a live meta nor a status log is retired: the branch
     # reports the teardown it just performed, and writing the index here would

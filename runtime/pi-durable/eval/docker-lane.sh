@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Disposable-container restart lane: F11 (service crash with a valid generation)
-# and F17 (host reboot -> store reopen + authority reconciliation).
+# and F17 (container restart -> store reopen + authority reconciliation).
 #
 # The failure boundary is owned here, outside the container. This script starts
 # a container that prepares one settled operation, kills it with SIGKILL, then
@@ -205,7 +205,7 @@ node -e '
     },
     f17: {
       status: f17 ? "pass" : "fail",
-      case: "host reboot -> store reopen + authority reconciliation",
+      case: "container restart -> store reopen + authority reconciliation",
       evidence: {
         storeReopened: verify.storePath !== null,
         authorityReconciled: verify.created === false,

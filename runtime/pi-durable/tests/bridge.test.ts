@@ -1,5 +1,6 @@
 /**
- * P1C bridge tests: candidate-result validation and dispatch idempotency.
+ * P1C bridge tests: candidate-result validation, dispatch idempotency, and the
+ * authority recheck at the outcome mutation boundary.
  */
 
 import assert from "node:assert/strict";
@@ -13,24 +14,28 @@ import {
   type OutcomeSink,
 } from "../src/bridge.ts";
 
-function fakeTransport(outcome: DispatchOutcome) {
+/** A transport that answers each dispatch call from a queue, last answer repeating. */
+function fakeTransport(outcomes: DispatchOutcome | DispatchOutcome[]) {
+  const queue = Array.isArray(outcomes) ? [...outcomes] : [outcomes];
   const receipts: { operationId: string; seq: number }[] = [];
+  let calls = 0;
   const transport: DispatchTransport = {
     async dispatch() {
-      return outcome;
+      calls += 1;
+      return queue.length > 1 ? queue.shift()! : queue[0]!;
     },
     async recordReceipt(operationId, seq) {
       receipts.push({ operationId, seq });
     },
   };
-  return { transport, receipts };
+  return { transport, receipts, dispatchCalls: () => calls };
 }
 
 function fakeSink() {
-  const appended: { summary: string; task: string }[] = [];
+  const appended: { key: string; summary: string; task: string }[] = [];
   const sink: OutcomeSink = {
-    async append(result) {
-      appended.push({ summary: result.summary, task: result.task });
+    async appendOrGet(operationKey, result) {
+      appended.push({ key: operationKey, summary: result.summary, task: result.task });
       return appended.length;
     },
   };
@@ -77,8 +82,8 @@ test("a malformed candidate result is refused with a diagnosable reason", () => 
   }
 });
 
-test("a first dispatch appends the outcome and records the receipt", async () => {
-  const { transport, receipts } = fakeTransport({
+test("a first dispatch appends under the operation key and records the receipt", async () => {
+  const { transport, receipts, dispatchCalls } = fakeTransport({
     ok: true,
     result: { task: "task-1", verdict: "routine", summary: "all clear" },
     replayed: false,
@@ -90,12 +95,14 @@ test("a first dispatch appends the outcome and records the receipt", async () =>
     { operationId: "op-1", prompt: "p", payload: {} },
   );
   assert.deepEqual(result, { seq: 1, replayed: false });
-  assert.deepEqual(appended, [{ summary: "all clear", task: "task-1" }]);
+  assert.deepEqual(appended, [{ key: "op-1", summary: "all clear", task: "task-1" }]);
   assert.deepEqual(receipts, [{ operationId: "op-1", seq: 1 }]);
+  // One execution dispatch plus one authority recheck at the mutation boundary.
+  assert.equal(dispatchCalls(), 2);
 });
 
 test("a settled repeat with a receipt appends nothing", async () => {
-  const { transport, receipts } = fakeTransport({
+  const { transport, receipts, dispatchCalls } = fakeTransport({
     ok: true,
     result: { task: "task-1", verdict: "routine", summary: "all clear" },
     replayed: true,
@@ -109,9 +116,10 @@ test("a settled repeat with a receipt appends nothing", async () => {
   assert.deepEqual(result, { seq: 4, replayed: true });
   assert.deepEqual(appended, []);
   assert.deepEqual(receipts, []);
+  assert.equal(dispatchCalls(), 1);
 });
 
-test("a settled repeat without a receipt is refused rather than blindly appended", async () => {
+test("a settled repeat without a receipt appends-or-gets exactly once under its key", async () => {
   const { transport, receipts } = fakeTransport({
     ok: true,
     result: { task: "task-1", verdict: "routine", summary: "all clear" },
@@ -119,76 +127,73 @@ test("a settled repeat without a receipt is refused rather than blindly appended
     receipt: null,
   });
   const { sink, appended } = fakeSink();
-  await assert.rejects(
-    () => runDurableDispatch({ transport, sink }, { operationId: "op-1", prompt: "p", payload: {} }),
-    (error: unknown) => error instanceof BridgeError && error.code === "RECONCILE_REQUIRED",
-  );
-  assert.deepEqual(appended, []);
-  assert.deepEqual(receipts, []);
-});
-
-function probeSink(probe: OutcomeSink["probe"]): { sink: OutcomeSink; appended: string[] } {
-  const appended: string[] = [];
-  const sink: OutcomeSink = {
-    async append(result) {
-      appended.push(result.summary);
-      return appended.length;
-    },
-    probe,
-  };
-  return { sink, appended };
-}
-
-test("a settled repeat whose outcome is already stored reconciles to that sequence", async () => {
-  const { transport, receipts } = fakeTransport({
-    ok: true,
-    result: { task: "task-1", verdict: "routine", summary: "all clear" },
-    replayed: true,
-    receipt: null,
-  });
-  const { sink, appended } = probeSink(async () => 3);
   const result = await runDurableDispatch(
     { transport, sink },
     { operationId: "op-1", prompt: "p", payload: {} },
   );
-  assert.deepEqual(result, { seq: 3, replayed: true, reconciled: true });
-  assert.deepEqual(appended, []);
-  assert.deepEqual(receipts, [{ operationId: "op-1", seq: 3 }]);
-});
-
-test("a settled repeat whose outcome is proven absent is appended exactly once", async () => {
-  const { transport, receipts } = fakeTransport({
-    ok: true,
-    result: { task: "task-1", verdict: "routine", summary: "all clear" },
-    replayed: true,
-    receipt: null,
-  });
-  const { sink, appended } = probeSink(async () => null);
-  const result = await runDurableDispatch(
-    { transport, sink },
-    { operationId: "op-1", prompt: "p", payload: {} },
-  );
-  assert.deepEqual(result, { seq: 1, replayed: false, reconciled: true });
-  assert.deepEqual(appended, ["all clear"]);
+  assert.deepEqual(result, { seq: 1, replayed: true, reconciled: true });
+  assert.deepEqual(appended, [{ key: "op-1", summary: "all clear", task: "task-1" }]);
   assert.deepEqual(receipts, [{ operationId: "op-1", seq: 1 }]);
 });
 
-test("a read-back that cannot answer keeps the refusal instead of guessing", async () => {
+test("an ownership replacement after settlement refuses the append and the receipt", async () => {
+  const { transport, receipts } = fakeTransport([
+    {
+      ok: true,
+      result: { task: "task-1", verdict: "routine", summary: "all clear" },
+      replayed: false,
+      receipt: null,
+    },
+    { ok: false, code: "AUTHORITY_STALE", message: "generation replaced" },
+  ]);
+  const { sink, appended } = fakeSink();
+  await assert.rejects(
+    () => runDurableDispatch({ transport, sink }, { operationId: "op-1", prompt: "p", payload: {} }),
+    (error: unknown) => error instanceof BridgeError && error.code === "AUTHORITY_STALE",
+  );
+  assert.deepEqual(appended, []);
+  assert.deepEqual(receipts, []);
+});
+
+test("an append-or-get that cannot decide stays unresolved", async () => {
   const { transport, receipts } = fakeTransport({
     ok: true,
     result: { task: "task-1", verdict: "routine", summary: "all clear" },
     replayed: true,
     receipt: null,
   });
-  const { sink, appended } = probeSink(async () => {
-    throw new Error("outcome store unreadable");
-  });
+  const sink: OutcomeSink = {
+    async appendOrGet() {
+      throw new Error("outcome store unavailable");
+    },
+  };
   await assert.rejects(
     () => runDurableDispatch({ transport, sink }, { operationId: "op-1", prompt: "p", payload: {} }),
     (error: unknown) => error instanceof BridgeError && error.code === "RECONCILE_REQUIRED",
   );
-  assert.deepEqual(appended, []);
   assert.deepEqual(receipts, []);
+});
+
+test("two distinct operations with identical text each append under their own key", async () => {
+  const outcome: DispatchOutcome = {
+    ok: true,
+    result: { task: "task-1", verdict: "routine", summary: "identical text" },
+    replayed: false,
+    receipt: null,
+  };
+  const { transport } = fakeTransport(outcome);
+  const { sink, appended } = fakeSink();
+  const first = await runDurableDispatch(
+    { transport, sink },
+    { operationId: "op-1", prompt: "p", payload: {} },
+  );
+  const second = await runDurableDispatch(
+    { transport, sink },
+    { operationId: "op-2", prompt: "p", payload: {} },
+  );
+  assert.equal(first.seq, 1);
+  assert.equal(second.seq, 2);
+  assert.deepEqual(appended.map((row) => row.key), ["op-1", "op-2"]);
 });
 
 test("a malformed sidecar result is refused before the outcome is appended", async () => {

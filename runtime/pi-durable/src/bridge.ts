@@ -76,15 +76,13 @@ export function parseCandidateResult(raw: unknown): CandidateResult {
 
 /** The existing outcome sink, owner: `bin/fm-branch-outcome.sh`. */
 export type OutcomeSink = {
-  append(result: CandidateResult): Promise<number>;
   /**
-   * Optional durable read-back used to reconcile a settled result whose receipt
-   * was never recorded. Returns the committed sequence when the sink can prove
-   * the result is already stored, or null when it can prove the result is
-   * absent. A sink without this capability cannot be reconciled, so the bridge
-   * keeps refusing a blind append.
+   * Atomically append the candidate result under the operation key, or return
+   * the sequence of the row already stored under that key. The key is the
+   * operation identity, so a retry and two distinct operations with identical
+   * text can never collide or duplicate.
    */
-  probe?(result: CandidateResult): Promise<number | null>;
+  appendOrGet(operationKey: string, result: CandidateResult): Promise<number>;
 };
 
 export type DispatchOutcome =
@@ -135,41 +133,35 @@ export async function runDurableDispatch(
   if (!dispatched.ok) {
     throw new BridgeError(dispatched.code, dispatched.message);
   }
-  if (dispatched.replayed) {
-    if (dispatched.receipt) {
-      return { seq: dispatched.receipt.seq, replayed: true };
-    }
-    // Settled but no committed receipt: the effect may or may not have been
-    // applied. A sink with a durable read-back reconciles the two stores; a
-    // sink without one must keep refusing a blind append.
-    if (!deps.sink.probe) {
-      throw new BridgeError(
-        "RECONCILE_REQUIRED",
-        "settled result has no committed outcome receipt; reconcile before retrying",
-      );
-    }
-    const candidate = parseCandidateResult(dispatched.result);
-    let committed: number | null;
-    try {
-      committed = await deps.sink.probe(candidate);
-    } catch (error) {
-      // An undecidable read-back is not a licence to append blindly.
-      const reason = error instanceof Error ? error.message : String(error);
-      throw new BridgeError(
-        "RECONCILE_REQUIRED",
-        `settled result has no committed outcome receipt and the read-back could not decide (${reason}); reconcile before retrying`,
-      );
-    }
-    if (committed !== null) {
-      await deps.transport.recordReceipt(input.operationId, committed);
-      return { seq: committed, replayed: true, reconciled: true };
-    }
-    const seq = await deps.sink.append(candidate);
-    await deps.transport.recordReceipt(input.operationId, seq);
-    return { seq, replayed: false, reconciled: true };
+  if (dispatched.replayed && dispatched.receipt) {
+    return { seq: dispatched.receipt.seq, replayed: true };
   }
   const candidate = parseCandidateResult(dispatched.result);
-  const seq = await deps.sink.append(candidate);
+  // Outcome mutation boundary: revalidate current authority with the sidecar
+  // after settlement and before anything is appended or receipted. An owner
+  // replacement between the model run and this point refuses here, so the
+  // stale operation never appends an outcome or records a receipt.
+  const verified = await deps.transport.dispatch({
+    operationId: input.operationId,
+    prompt: input.prompt,
+    payload: input.payload,
+  });
+  if (!verified.ok) {
+    throw new BridgeError(verified.code, verified.message);
+  }
+  let seq: number;
+  try {
+    seq = await deps.sink.appendOrGet(input.operationId, candidate);
+  } catch (error) {
+    // The outcome may or may not have been applied; never declare success.
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new BridgeError(
+      "RECONCILE_REQUIRED",
+      `outcome append-or-get could not be completed (${reason}); reconcile before retrying`,
+    );
+  }
   await deps.transport.recordReceipt(input.operationId, seq);
-  return { seq, replayed: false };
+  return dispatched.replayed
+    ? { seq, replayed: true, reconciled: true }
+    : { seq, replayed: false };
 }

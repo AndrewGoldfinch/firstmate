@@ -101,6 +101,20 @@ export class DurableSidecar {
   private readonly maxOutstanding: number;
   private readonly now: () => number;
   private readonly barriers: (name: string) => void | Promise<void>;
+  // Serializes ownership changes (the recorded supervisor binding) against
+  // the outcome mutation boundaries (acceptance, settlement, receipt). Node is
+  // single-threaded, but every guarded unit awaits before it writes, so units
+  // can interleave without this lock.
+  private ownershipTail: Promise<unknown> = Promise.resolve();
+
+  private withOwnershipLock<T>(unit: () => Promise<T> | T): Promise<T> {
+    const run = this.ownershipTail.then(unit, unit);
+    this.ownershipTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
   private outstanding = 0;
   private stopping: Promise<void> | null = null;
 
@@ -332,6 +346,10 @@ export class DurableSidecar {
    * new configuration; a lower generation is stale and refused.
    */
   private async ensureSupervisor(request: EnsureSupervisorRequest) {
+    return this.withOwnershipLock(() => this.ensureSupervisorLocked(request));
+  }
+
+  private async ensureSupervisorLocked(request: EnsureSupervisorRequest) {
     validateCwd(request.agent.cwd);
     const configDigest = pinnedConfigDigest(request.capabilityProfile, request.agent);
     const existing = this.store.getSupervisorBinding(this.homeId, request.supervisorId);
@@ -555,51 +573,72 @@ export class DurableSidecar {
   }
 
   private async dispatchOperation(request: DispatchRequest) {
-    const binding = this.authorize(request);
     const payloadDigest = digestOf(request.payload);
+    const promptDigest = digestOf(request.prompt);
     if (request.payloadDigest !== undefined && request.payloadDigest !== payloadDigest) {
       throw new ProtocolError("DIGEST_MISMATCH", "payloadDigest does not match the submitted payload");
     }
 
     const existing = this.store.getOperation(request.operationId);
     if (existing) {
-      if (existing.supervisorId !== request.supervisorId || existing.payloadDigest !== payloadDigest) {
-        throw new ProtocolError("CONFLICT", "operation ID already accepted with a different payload");
+      const binding = this.authorize(request);
+      this.assertSameExecution(existing, request, binding, payloadDigest, promptDigest);
+      if (existing.state === "settled") {
+        return { record: existing, result: existing.result, replayed: true };
       }
-      if (existing.state !== "settled") {
+      if (existing.state !== "accepted") {
         throw new ProtocolError(
-          "RECONCILE_REQUIRED",
-          "operation was accepted but not settled; reconcile before retrying",
+          "CONFLICT",
+          `operation is ${existing.state}; a cancelled operation cannot settle a result`,
         );
       }
-      return { record: existing, result: existing.result, replayed: true };
+      // Accepted but unsettled: reconnect the original submission by its
+      // requestId and settle exactly one outcome instead of refusing.
+      await this.provider.resume();
+      this.recordObservation("resumed", request.operationId, { state: "accepted" });
+      await this.barrier("dispatch.resume.before");
+      const resumed = await this.provider.runSupervision({
+        conversationId: binding.conversationId,
+        prompt: request.prompt,
+        operationId: request.operationId,
+      });
+      await this.barrier("dispatch.model.after");
+      const settled = await this.settleSettled(request, resumed);
+      await this.barrier("dispatch.settle.after");
+      return { record: settled, result: resumed, replayed: false };
     }
 
-    const at = this.now();
-    const record: OperationRecord = {
-      operationId: request.operationId,
-      homeId: this.homeId,
-      supervisorId: request.supervisorId,
-      state: "accepted",
-      payloadDigest,
-      configDigest: binding.configDigest,
-      rowIds: request.rowIds,
-      ownerGeneration: request.ownerGeneration,
-      wakeClaimId: request.wakeClaimId,
-      result: null,
-      receipt: null,
-      createdAt: at,
-      updatedAt: at,
-    };
-    await this.barrier("dispatch.accept.before");
-    this.store.insertOperation(record);
-    this.recordObservation("accepted", request.operationId, { state: "accepted" });
-    await this.barrier("dispatch.accept.after");
+    const accepted = await this.withOwnershipLock(async () => {
+      const binding = this.authorize(request);
+      const at = this.now();
+      const record: OperationRecord = {
+        operationId: request.operationId,
+        homeId: this.homeId,
+        supervisorId: request.supervisorId,
+        state: "accepted",
+        payloadDigest,
+        promptDigest,
+        configDigest: binding.configDigest,
+        rowIds: request.rowIds,
+        ownerGeneration: request.ownerGeneration,
+        wakeClaimId: request.wakeClaimId,
+        result: null,
+        receipt: null,
+        createdAt: at,
+        updatedAt: at,
+      };
+      await this.barrier("dispatch.accept.before");
+      this.store.insertOperation(record);
+      this.recordObservation("accepted", request.operationId, { state: "accepted" });
+      await this.barrier("dispatch.accept.after");
+      return { record, conversationId: binding.conversationId };
+    });
+
     await this.barrier("dispatch.model.before");
     let result: JsonValue;
     try {
       result = await this.provider.runSupervision({
-        conversationId: binding.conversationId,
+        conversationId: accepted.conversationId,
         prompt: request.prompt,
         operationId: request.operationId,
       });
@@ -619,11 +658,87 @@ export class DurableSidecar {
       throw error;
     }
     await this.barrier("dispatch.model.after");
-    this.store.settleOperation(request.operationId, result, this.now());
-    this.recordObservation("settlement", request.operationId, result);
+    const settled = await this.settleSettled(request, result);
     await this.barrier("dispatch.settle.after");
-    const settled = this.store.getOperation(request.operationId) ?? record;
     return { record: settled, result, replayed: false };
+  }
+
+  /**
+   * A repeated operation ID must carry the complete original execution
+   * specification: supervisor, payload, prompt, and pinned configuration.
+   * Anything else is a conflict, never a replay.
+   */
+  private assertSameExecution(
+    existing: OperationRecord,
+    request: DispatchRequest,
+    binding: SupervisorBinding,
+    payloadDigest: string,
+    promptDigest: string,
+  ): void {
+    if (existing.ownerGeneration !== null && existing.ownerGeneration !== binding.generation) {
+      throw new ProtocolError(
+        "AUTHORITY_STALE",
+        "operation belongs to a replaced ownership generation",
+      );
+    }
+    if (existing.supervisorId !== request.supervisorId || existing.payloadDigest !== payloadDigest) {
+      throw new ProtocolError("CONFLICT", "operation ID already accepted with a different payload");
+    }
+    if (existing.promptDigest !== promptDigest) {
+      throw new ProtocolError("CONFLICT", "operation ID already accepted with a different prompt");
+    }
+    if (existing.configDigest !== binding.configDigest) {
+      throw new ProtocolError("CONFLICT", "operation ID already accepted with a different configuration");
+    }
+    if (existing.wakeClaimId !== null && existing.wakeClaimId !== binding.wakeClaimId) {
+      throw new ProtocolError("AUTHORITY_CONFLICT", "operation belongs to a different wake claim");
+    }
+    const recordedRows = [...existing.rowIds].sort().join("\n");
+    const requestedRows = [...request.rowIds].sort().join("\n");
+    if (recordedRows !== requestedRows) {
+      throw new ProtocolError("AUTHORITY_SCOPE", "operation belongs to a different row scope");
+    }
+  }
+
+  /**
+   * Settle one accepted operation under current authority. Runs inside the
+   * ownership lock so a generation change cannot land between the authority
+   * check and the mutation, and refuses a settlement whose cancellation was
+   * recorded while the model was running.
+   */
+  private async settleSettled(request: DispatchRequest, result: JsonValue): Promise<OperationRecord> {
+    return this.withOwnershipLock(() => {
+      const binding = this.authorize(request);
+      const current = this.store.getOperation(request.operationId);
+      if (!current) {
+        throw new ProtocolError("NOT_FOUND", "operation disappeared before settlement");
+      }
+      if (current.ownerGeneration !== null && current.ownerGeneration !== binding.generation) {
+        throw new ProtocolError(
+          "AUTHORITY_STALE",
+          "operation belongs to a replaced ownership generation; refusing to settle it",
+        );
+      }
+      if (current.configDigest !== binding.configDigest) {
+        throw new ProtocolError(
+          "AUTHORITY_STALE",
+          "the recorded ownership configuration changed before settlement",
+        );
+      }
+      if (
+        current.state === "cancelling" ||
+        current.state === "cancelled" ||
+        current.state === "cancel-unresolved"
+      ) {
+        throw new ProtocolError(
+          "OPERATION_CANCELLED",
+          `operation is ${current.state}; refusing to settle its result`,
+        );
+      }
+      this.store.settleOperation(request.operationId, result, this.now());
+      this.recordObservation("settlement", request.operationId, result);
+      return this.store.getOperation(request.operationId) ?? current;
+    });
   }
 
   /** Append one durable outbox observation and bound the queue. */
@@ -691,17 +806,32 @@ export class DurableSidecar {
 
   /** Record the mirrored outcome receipt for an operation. Idempotent. */
   private async receipt(request: ReceiptRequest) {
-    const existing = this.store.getOperation(request.operationId);
-    if (!existing) {
-      throw new ProtocolError("NOT_FOUND", "unknown operation");
-    }
-    if (existing.receipt && existing.receipt.seq !== request.seq) {
-      throw new ProtocolError("CONFLICT", "operation already has a different outcome receipt");
-    }
-    await this.barrier("receipt.before");
-    this.store.recordReceipt(request.operationId, request.seq, this.now());
-    await this.barrier("receipt.after");
-    return { recorded: true as const };
+    return this.withOwnershipLock(async () => {
+      this.authorize(request);
+      const existing = this.store.getOperation(request.operationId);
+      if (!existing) {
+        throw new ProtocolError("NOT_FOUND", "unknown operation");
+      }
+      if (existing.supervisorId !== request.supervisorId) {
+        throw new ProtocolError("AUTHORITY_CONFLICT", "operation belongs to a different supervisor");
+      }
+      if (existing.ownerGeneration !== null && existing.ownerGeneration !== request.ownerGeneration) {
+        throw new ProtocolError(
+          "AUTHORITY_STALE",
+          "operation belongs to a replaced ownership generation; refusing its receipt",
+        );
+      }
+      if (existing.state !== "settled") {
+        throw new ProtocolError("RECONCILE_REQUIRED", `operation is ${existing.state}, not settled`);
+      }
+      if (existing.receipt && existing.receipt.seq !== request.seq) {
+        throw new ProtocolError("CONFLICT", "operation already has a different outcome receipt");
+      }
+      await this.barrier("receipt.before");
+      this.store.recordReceipt(request.operationId, request.seq, this.now());
+      await this.barrier("receipt.after");
+      return { recorded: true as const };
+    });
   }
 
   private submit(request: SubmitInput): SubmitResult {
@@ -736,6 +866,7 @@ export class DurableSidecar {
       supervisorId: request.supervisorId,
       state: "accepted",
       payloadDigest,
+      promptDigest: "",
       configDigest,
       rowIds: request.rowIds ?? [],
       ownerGeneration: request.ownerGeneration ?? null,

@@ -174,8 +174,8 @@ test("a malformed candidate result is refused and the operation stays unresolved
   assert.equal((malformed as { ok: boolean }).ok, false);
   assert.equal(errorCode(malformed), "INTERNAL");
 
-  // The operation was accepted but not settled, so a retry requires reconciliation.
-  faux.setResponses([fauxAssistantMessage('{"verdict":"routine","summary":"ok"}')]);
+  // The retry reconnects the same settled submission; the malformed answer
+  // still cannot become a candidate result, so the operation stays accepted.
   const retry = await call(
     sidecar.socketPath,
     dispatchRequest({
@@ -186,5 +186,172 @@ test("a malformed candidate result is refused and the operation stays unresolved
       payload: {},
     }),
   );
-  assert.equal(errorCode(retry), "RECONCILE_REQUIRED");
+  assert.equal(errorCode(retry), "INTERNAL");
+  const inspected = await call(sidecar.socketPath, {
+    protocolVersion: PROTOCOL_VERSION,
+    homeId: sidecar.homeId,
+    op: "inspect",
+    operationId: "op-malformed",
+  });
+  assert.equal(
+    (inspected as { ok: true; result: { record: { state: string } } }).result.record.state,
+    "accepted",
+  );
+});
+
+test("a retry of an accepted-but-unsettled operation resumes the original submission", async () => {
+  const home = tempHome();
+  const faux = fauxProvider();
+  const model = faux.models[0]!;
+  let crashOnce = true;
+  const sidecar = await DurableSidecar.start({
+    home,
+    configureModels: (models) => models.setProvider(faux.provider),
+    barriers: (name) => {
+      if (name === "dispatch.model.after" && crashOnce) {
+        crashOnce = false;
+        throw new Error("simulated execution crash");
+      }
+    },
+  });
+  sidecars.push(sidecar);
+  await call(
+    sidecar.socketPath,
+    ensureSupervisorRequest({
+      homeId: sidecar.homeId,
+      cwd: home,
+      model: { provider: model.provider, modelId: model.id },
+    }),
+  );
+  faux.setResponses([fauxAssistantMessage('{"verdict":"routine","summary":"resumed"}')]);
+
+  const crashed = await call(
+    sidecar.socketPath,
+    dispatchRequest({
+      homeId: sidecar.homeId,
+      cwd: home,
+      operationId: "op-resume",
+      prompt: "supervise",
+      payload: { rows: ["row-1"], generation: 1 },
+    }),
+  );
+  assert.equal(errorCode(crashed), "INTERNAL");
+
+  const retry = await call(
+    sidecar.socketPath,
+    dispatchRequest({
+      homeId: sidecar.homeId,
+      cwd: home,
+      operationId: "op-resume",
+      prompt: "supervise",
+      payload: { rows: ["row-1"], generation: 1 },
+    }),
+  );
+  assert.equal((retry as { ok: boolean }).ok, true);
+  const result = (retry as { ok: true; result: DispatchResult }).result;
+  assert.deepEqual(result.result, { verdict: "routine", summary: "resumed" });
+  assert.equal(result.record.state, "settled");
+  // No second model call was needed: the settled submission was re-read.
+  assert.equal(faux.getPendingResponseCount(), 0);
+});
+
+test("an ownership replacement refuses the stale settlement and receipt", async () => {
+  const home = tempHome();
+  const faux = fauxProvider();
+  const model = faux.models[0]!;
+  let sidecar: DurableSidecar;
+  let replaced = false;
+  sidecar = await DurableSidecar.start({
+    home,
+    configureModels: (models) => models.setProvider(faux.provider),
+    barriers: async (name) => {
+      if (name === "dispatch.model.after" && !replaced) {
+        replaced = true;
+        await call(
+          sidecar.socketPath,
+          ensureSupervisorRequest({
+            homeId: sidecar.homeId,
+            cwd: home,
+            generation: 2,
+            model: { provider: model.provider, modelId: model.id },
+          }),
+        );
+      }
+    },
+  });
+  sidecars.push(sidecar);
+  await call(
+    sidecar.socketPath,
+    ensureSupervisorRequest({
+      homeId: sidecar.homeId,
+      cwd: home,
+      model: { provider: model.provider, modelId: model.id },
+    }),
+  );
+  faux.setResponses([fauxAssistantMessage('{"verdict":"routine","summary":"stale"}')]);
+
+  const stale = await call(
+    sidecar.socketPath,
+    dispatchRequest({
+      homeId: sidecar.homeId,
+      cwd: home,
+      operationId: "op-replaced",
+      prompt: "supervise",
+      payload: { rows: ["row-1"], generation: 1 },
+    }),
+  );
+  assert.equal(errorCode(stale), "AUTHORITY_STALE");
+  const inspected = await call(sidecar.socketPath, {
+    protocolVersion: PROTOCOL_VERSION,
+    homeId: sidecar.homeId,
+    op: "inspect",
+    operationId: "op-replaced",
+  });
+  assert.equal(
+    (inspected as { ok: true; result: { record: { state: string } } }).result.record.state,
+    "accepted",
+  );
+  const receipt = await call(sidecar.socketPath, receiptRequest(sidecar.homeId, "op-replaced", 1));
+  assert.equal(errorCode(receipt), "AUTHORITY_STALE");
+});
+
+test("a changed prompt under a repeated operation ID is refused", async () => {
+  const home = tempHome();
+  const faux = fauxProvider();
+  const model = faux.models[0]!;
+  const sidecar = await DurableSidecar.start({
+    home,
+    configureModels: (models) => models.setProvider(faux.provider),
+  });
+  sidecars.push(sidecar);
+  await call(
+    sidecar.socketPath,
+    ensureSupervisorRequest({
+      homeId: sidecar.homeId,
+      cwd: home,
+      model: { provider: model.provider, modelId: model.id },
+    }),
+  );
+  faux.setResponses([fauxAssistantMessage('{"verdict":"routine","summary":"first"}')]);
+  await call(
+    sidecar.socketPath,
+    dispatchRequest({
+      homeId: sidecar.homeId,
+      cwd: home,
+      operationId: "op-prompt",
+      prompt: "first prompt",
+      payload: { rows: ["row-1"], generation: 1 },
+    }),
+  );
+  const conflict = await call(
+    sidecar.socketPath,
+    dispatchRequest({
+      homeId: sidecar.homeId,
+      cwd: home,
+      operationId: "op-prompt",
+      prompt: "changed prompt",
+      payload: { rows: ["row-1"], generation: 1 },
+    }),
+  );
+  assert.equal(errorCode(conflict), "CONFLICT");
 });

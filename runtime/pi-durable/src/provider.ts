@@ -217,7 +217,13 @@ export class DurableProvider {
       throw new Error(`supervision conversation ${input.conversationId} was not found`);
     }
     const submission = await conversation.submit(
-      { type: "input", content: input.prompt },
+      {
+        type: "input",
+        content: input.prompt,
+        // The operation identity is the upstream dedup key: a retry after a
+        // crash reattaches the original submission instead of executing twice.
+        ...(input.operationId !== undefined ? { requestId: input.operationId } : {}),
+      },
       context,
     );
     const settled = await submission.wait(context);

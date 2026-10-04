@@ -59,6 +59,8 @@ export type CalibrationResult = {
     recoveryTime: "improved" | "parity" | "unproven";
     duplicateOutcomes: "preserved" | "unproven";
   };
+  /** Why each scorecard metric is or is not a valid measurement of its claim. */
+  limits: string[];
 };
 
 function median(values: readonly number[]): number {
@@ -97,6 +99,11 @@ export async function runCalibration(
         basis: "design defaults; no measured runs",
       },
       verdicts: { manualActions: "unproven", recoveryTime: "unproven", duplicateOutcomes: "unproven" },
+      limits: [
+        "manual recovery actions count recorded faults, not operator actions",
+        "recovery time compares whole scenario wall-clock times whose faulted runs still include missing outcomes",
+        "duplicate outcomes are compared by subtracting total outcome counts between arms; equal totals do not establish the absence of duplicates",
+      ],
     };
   }
 
@@ -207,22 +214,17 @@ export async function runCalibration(
     manualActions: { existing: existingActions, piDurable: durableActions },
     thresholds,
     verdicts: {
-      // A zero baseline has no percentage to reduce, so it is reported as parity.
-      manualActions:
-        actionReduction === null
-          ? "parity"
-          : actionReduction >= thresholds.manualActionReductionPercent
-            ? "improved"
-            : actionReduction > 0
-              ? "unproven"
-              : "parity",
-      recoveryTime:
-        recoveryReduction === null
-          ? "parity"
-          : recoveryReduction >= thresholds.recoveryTimeReductionPercent
-            ? "improved"
-            : "unproven",
-      duplicateOutcomes: duplicateOutcomes ? "unproven" : "preserved",
+      // Each benefit label is held to what the measurement actually proves:
+      // none of these three metrics measures the claimed benefit, so every
+      // verdict stays unproven regardless of the observed counts.
+      manualActions: "unproven",
+      recoveryTime: "unproven",
+      duplicateOutcomes: "unproven",
     },
+    limits: [
+      "manual recovery actions count recorded faults, not operator actions",
+      "recovery time compares whole scenario wall-clock times whose faulted runs still include missing outcomes",
+      "duplicate outcomes are compared by subtracting total outcome counts between arms; equal totals do not establish the absence of duplicates",
+    ],
   };
 }

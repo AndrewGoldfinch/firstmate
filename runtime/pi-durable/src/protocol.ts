@@ -123,6 +123,7 @@ export type ErrorCode =
   | "AUTHORITY_CONFLICT"
   | "AUTHORITY_SCOPE"
   | "SCOPE_UNSUPPORTED"
+  | "OPERATION_CANCELLED"
   | "INTERNAL";
 
 /** A refusal that maps to a protocol error code. */
@@ -197,11 +198,14 @@ export type DispatchRequest = BaseRequest &
   };
 
 /** Record the mirrored delivery receipt (outcome sequence) for an operation. */
-export type ReceiptRequest = BaseRequest & {
-  op: "receipt";
-  operationId: string;
-  seq: number;
-};
+export type ReceiptRequest = BaseRequest &
+  AuthorityBinding & {
+    op: "receipt";
+    supervisorId: string;
+    capabilityProfile: string;
+    operationId: string;
+    seq: number;
+  };
 
 export type ObservationKind = "accepted" | "settlement" | "unresolved";
 
@@ -317,6 +321,7 @@ export type OperationRecord = {
   supervisorId: string;
   state: "accepted" | "settled" | "cancelling" | "cancelled" | "cancel-unresolved";
   payloadDigest: string;
+  promptDigest: string;
   configDigest: string;
   rowIds: string[];
   ownerGeneration: number | null;
@@ -586,7 +591,10 @@ export function parseRequest(raw: unknown): SidecarRequest {
     case "receipt":
       return {
         ...base,
+        ...parseAuthority(source),
         op: "receipt",
+        supervisorId: asString(source, "supervisorId"),
+        capabilityProfile: parseCapabilityProfile(source),
         operationId: asString(source, "operationId"),
         seq: parseGeneration(source, "seq"),
       };

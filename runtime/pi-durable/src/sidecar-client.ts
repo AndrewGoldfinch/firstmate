@@ -112,8 +112,7 @@ export class SidecarClient implements DispatchTransport {
 
   async recordReceipt(operationId: string, seq: number): Promise<void> {
     const response = await sidecarRequest(this.options.socketPath, {
-      protocolVersion: PROTOCOL_VERSION,
-      homeId: this.options.homeId,
+      ...this.authority(),
       op: "receipt",
       operationId,
       seq,

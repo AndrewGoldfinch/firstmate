@@ -3,8 +3,12 @@
  *
  * Shells out to the existing FirstMate outcome store, `bin/fm-branch-outcome.sh`,
  * so the durable path writes the same durable record through the same owner as
- * the existing branch. The bridge never acknowledges wake rows or mutates the
- * task lifecycle; it only appends the candidate result.
+ * the existing branch. Every durable append carries the sidecar operation id
+ * as the store's operation key, which makes the script's append an atomic
+ * append-or-return-existing: a retried operation, or two distinct operations
+ * with identical text, can never collide or duplicate. The bridge never
+ * acknowledges wake rows or mutates the task lifecycle; it only appends the
+ * candidate result.
  */
 
 import { spawn } from "node:child_process";
@@ -16,7 +20,16 @@ export type OutcomeSinkOptions = {
   cwd?: string;
 };
 
-const PROBE_RECENT = 200;
+/** Bound on the store-visible operation key; matches fm-branch-outcome.sh. */
+export const MAX_OPERATION_KEY_CHARS = 256;
+
+function assertOperationKey(key: string): void {
+  if (key.length === 0 || key.length > MAX_OPERATION_KEY_CHARS || /[\t\n\r]/.test(key)) {
+    throw new Error(
+      `operation key must be a non-empty value of at most ${MAX_OPERATION_KEY_CHARS} characters without control characters`,
+    );
+  }
+}
 
 type ScriptRun = { code: number | null; stdout: string; stderr: string };
 
@@ -42,53 +55,16 @@ async function runOutcomeScript(
   });
 }
 
-/** The outcome row fields the read-back can see and match on. */
-type OutcomeRow = { seq?: unknown; task?: unknown; verdict?: unknown; summary?: unknown };
-
 /**
- * Match one result against the rows the store returned.
- *
- * A full window may have been truncated, so absence cannot be proven from it;
- * that case refuses instead of guessing, because guessing would append a
- * duplicate outcome.
- */
-export function matchOutcomeRow(
-  rows: readonly string[],
-  result: CandidateResult,
-  window = PROBE_RECENT,
-): number | null {
-  if (rows.length >= window) {
-    throw new Error(`outcome store window of ${window} rows is full, so absence cannot be proven`);
-  }
-  for (const line of rows) {
-    const row = JSON.parse(line) as OutcomeRow;
-    if (
-      row.task !== result.task ||
-      row.verdict !== result.verdict ||
-      row.summary !== result.summary
-    ) {
-      continue;
-    }
-    if (typeof row.seq !== "number") {
-      throw new Error("fm-branch-outcome.sh list returned a matching row without a numeric seq");
-    }
-    return row.seq;
-  }
-  return null;
-}
-
-/**
- * Build an outcome sink that appends through `bin/fm-branch-outcome.sh`.
- *
- * `probe` reads the same store back through `list`, so a settled result whose
- * receipt was never recorded can be reconciled instead of blindly appended.
- * It matches on the row identity the store exposes (task, verdict, summary);
- * two distinct operations that commit identical rows are indistinguishable,
- * which the evaluation report records as the remaining ceiling.
+ * Build an outcome sink that appends through `bin/fm-branch-outcome.sh` under
+ * the operation key. The script owns the atomic append-or-return-existing
+ * semantics; this adapter only transports the key and validates it at the
+ * trust boundary.
  */
 export function createOutcomeSink(options: OutcomeSinkOptions): OutcomeSink {
   return {
-    async append(result: CandidateResult): Promise<number> {
+    async appendOrGet(operationKey: string, result: CandidateResult): Promise<number> {
+      assertOperationKey(operationKey);
       const args = [
         options.scriptPath,
         "append",
@@ -98,6 +74,8 @@ export function createOutcomeSink(options: OutcomeSinkOptions): OutcomeSink {
         result.verdict,
         "--summary",
         result.summary,
+        "--operation-key",
+        operationKey,
       ];
       if (result.wake !== undefined) args.push("--wake", result.wake);
       if (result.silent !== undefined) args.push("--silent", String(result.silent));
@@ -113,23 +91,6 @@ export function createOutcomeSink(options: OutcomeSinkOptions): OutcomeSink {
         throw new Error(`fm-branch-outcome.sh append returned a non-numeric sequence: ${stdout.trim()}`);
       }
       return seq;
-    },
-    async probe(result: CandidateResult): Promise<number | null> {
-      const { code, stdout, stderr } = await runOutcomeScript(options, [
-        options.scriptPath,
-        "list",
-        "--recent",
-        String(PROBE_RECENT),
-      ]);
-      if (code !== 0) {
-        throw new Error(
-          `fm-branch-outcome.sh list exited ${code ?? "none"}: ${stderr.trim()}`,
-        );
-      }
-      return matchOutcomeRow(
-        stdout.split("\n").filter((line) => line.trim().length > 0),
-        result,
-      );
     },
   };
 }

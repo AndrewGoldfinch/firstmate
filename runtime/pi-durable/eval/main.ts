@@ -44,6 +44,11 @@ export type EvaluationResults = {
   dockerLane: DockerLaneResult;
   pilot: PilotResult;
   calibration: CalibrationResult;
+  /** The reviewer's recommended end-to-end verification and its environment note. */
+  verification: {
+    milestone: string;
+    environmentSensitivity: string;
+  };
 };
 
 export async function runEvaluation(workDir = mkdtempSync(join(tmpdir(), "fm-pi-durable-eval-"))): Promise<EvaluationResults> {
@@ -96,7 +101,7 @@ export async function runEvaluation(workDir = mkdtempSync(join(tmpdir(), "fm-pi-
 
   return {
     generatedAt: new Date().toISOString(),
-    environment: `Node ${process.version}; local Linux host; deterministic faux model for both arms; disposable-container restart lane for the process-crash and reboot boundaries; bounded real-model pilot when a provider credential is reachable`,
+    environment: `Node ${process.version}; local Linux host; deterministic faux model for both arms; disposable-container restart lane for the process-crash and store-reopen boundaries; bounded real-model pilot when a provider credential is reachable`,
     arms: { existing, "pi-durable": durable, existingWithFault, "pi-durableWithFault": durableWithFault },
     grades,
     negativeControls: negative,
@@ -104,6 +109,12 @@ export async function runEvaluation(workDir = mkdtempSync(join(tmpdir(), "fm-pi-
     dockerLane,
     pilot,
     calibration,
+    verification: {
+      milestone:
+        "two successive wakes, an execution crash with resume, and an ownership replacement through the extension's durable-branch path and the real sidecar; exactly one outcome per accepted operation, no stale append, distinct identities (runtime/pi-durable/tests/milestone.test.ts)",
+      environmentSensitivity:
+        "socket-dependent tests are environment-sensitive: the reviewer's environment blocked Unix-socket listeners (listen EPERM)",
+    },
   };
 }
 
@@ -129,6 +140,8 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("A disposable-container restart lane provides the process-crash and store-reopen boundaries; no real VM or OS reboot boundary exists, and every case this environment cannot exercise is recorded as not-covered, never faked.");
   lines.push("Arm A is a reduced model of the existing in-process path: it uses the real outcome store and wake semantics but not the full Pi supervision extension.");
   lines.push("Arm B is the real durable sidecar, bridge, and outcome sink with a deterministic faux model.");
+  lines.push("Correctness evidence is initial contracts tested; important correctness gaps remain, so the prototype stays experimental.");
+  lines.push("Socket-dependent tests are environment-sensitive: the reviewer's environment blocked Unix-socket listeners (listen EPERM), so a run without socket support records those cases as not-covered rather than passing them.");
   lines.push("");
   lines.push("## Grader scorecard");
   lines.push("");
@@ -200,7 +213,7 @@ export function renderReport(results: EvaluationResults): string {
     `| Reliable recovery | Correct dispositions / fleet tasks | ${results.grades.existing.passed ? "all" : "some"} | ${results.grades["pi-durable"].passed ? "all" : "some"} | ${results.grades["pi-durable"].passed ? "parity" : "unproven"} |`,
   );
   lines.push(
-    `| Safe retries | Duplicate outcomes after a fault | ${results.arms.existingWithFault.trace.outcomes.length} outcomes for 6 tasks | ${results.arms["pi-durableWithFault"].trace.outcomes.length} outcomes for 6 tasks | ${results.grades["pi-durableWithFault"].passed ? "parity or better" : "unproven"} |`,
+    `| Safe retries | Outcome rows after a fault (total counts, not a duplicate check) | ${results.arms.existingWithFault.trace.outcomes.length} outcomes for 6 tasks | ${results.arms["pi-durableWithFault"].trace.outcomes.length} outcomes for 6 tasks | unproven |`,
   );
   lines.push(
     `| Controlled ownership | Stale-owner actions | ${results.arms.existing.trace.effects.filter((effect) => !results.arms.existing.trace.allowedOwners.includes(effect.owner)).length} | ${results.arms["pi-durable"].trace.effects.filter((effect) => !results.arms["pi-durable"].trace.allowedOwners.includes(effect.owner)).length} | pass |`,
@@ -209,7 +222,7 @@ export function renderReport(results: EvaluationResults): string {
     `| Useful visibility | Recoverable settlements | n/a | ${results.arms["pi-durable"].trace.operations.filter((operation) => operation.state === "settled").length} | pass |`,
   );
   lines.push(
-    `| Reduced recovery burden | Manual recovery actions on the faulted fleet | ${results.arms.existingWithFault.faults.length} | ${results.arms["pi-durableWithFault"].faults.length} | ${results.calibration.verdicts.manualActions} |`,
+    `| Reduced recovery burden | Recorded faults on the faulted fleet (not operator actions) | ${results.arms.existingWithFault.faults.length} | ${results.arms["pi-durableWithFault"].faults.length} | ${results.calibration.verdicts.manualActions} |`,
   );
   lines.push(
     `| Faster recovery | Median faulted-scenario time (ms) | ${Math.round(results.calibration.medians.existingWithFault)} | ${Math.round(results.calibration.medians.piDurableWithFault)} | ${results.calibration.verdicts.recoveryTime} |`,
@@ -234,6 +247,12 @@ export function renderReport(results: EvaluationResults): string {
     `Verdicts: manual recovery actions ${results.calibration.verdicts.manualActions}, recovery time ${results.calibration.verdicts.recoveryTime}, duplicate outcomes ${results.calibration.verdicts.duplicateOutcomes}.`,
   );
   lines.push("");
+  lines.push("## Measurement limits");
+  lines.push("");
+  for (const limit of results.calibration.limits) {
+    lines.push(`- ${limit}.`);
+  }
+  lines.push("");
   lines.push("| Run | Arm A (ms) | Arm B (ms) | Arm A faulted (ms) | Arm B faulted (ms) |");
   lines.push("| --- | --- | --- | --- | --- |");
   for (const sample of results.calibration.samples) {
@@ -252,12 +271,14 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("- Arm A is a reduced model, not the full pinned Pi supervision extension; it demonstrates the durability gap of an in-process owner without durable acceptance, and does not exercise the extension's own recovery.");
   lines.push("- The faux model returns fixture truth, so this harness measures execution durability, not model judgment.");
   lines.push("- F09 is not covered here: the routine-note delivery limitation is documented rather than re-tested.");
-  lines.push("- The outcome read-back reconciles a missing receipt by matching the row identity the store exposes (task, verdict, summary); two distinct operations that commit identical rows are indistinguishable, so that case still requires an explicit receipt.");
+  lines.push("- The outcome sink is keyed by the operation identity with an atomic append-or-return-existing, so two distinct operations with identical text no longer collide; the evaluation's duplicate-outcome comparison still only subtracts total outcome counts between arms and does not establish the absence of duplicates.");
   lines.push("- The container lane shares the host pid namespace on purpose, because the runtime ownership lock records a pid and treats a live pid as a live owner; a containerized restart inside its own pid namespace would need an explicit lock reclaim first.");
   lines.push("- The container lane is a process and store boundary, not an OS reboot: it proves the store reopens and the recorded authority reconciles, not that a kernel or filesystem failure is survivable.");
   lines.push("- The pilot's answers vary between runs, so its disposition match count is one sample rather than a rate.");
   lines.push("- The real-model pilot asks one shared set of model answers and replays them through both arms, so it isolates execution durability rather than measuring per-arm model variance; independent per-arm model calls remain the fuller form the design describes.");
   lines.push("- The pilot drives the pinned provider directly because the durable conversation seam does not carry the session-affinity header the provider requires, so it does not exercise the prototype's execution seam end to end.");
+  lines.push("- F16 exercises credential reachability, not an injected missing-credential or incompatible-dependency failure; F17 is a container process/store restart, not a host reboot; F18 exercises a wrong-home refusal, not a store restored into another home. Those cases are marked known-gap rather than pass.");
+  lines.push("- The milestone verification drives two successive wakes, an execution crash with resume, and an ownership replacement through the extension's durable-branch path and the real sidecar; it verifies exactly one outcome per accepted operation, no stale append, and distinct identities. Socket-dependent tests are environment-sensitive (the reviewer's environment blocked Unix-socket listeners with listen EPERM).");
   lines.push("- Token and cost comparison and the operator diagnosis study from the design remain out of scope for this pass.");
   lines.push("- The calibrated thresholds are derived from this lab's own run-to-run spread, and the deterministic arms are byte-identical workloads, so a measured recovery-time improvement would have to exceed several times the noise floor before it counts as proven.");
   lines.push("");

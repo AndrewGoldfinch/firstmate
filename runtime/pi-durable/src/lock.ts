@@ -6,19 +6,25 @@
  * lock itself. Exactly one owner process may hold the lock for a canonical
  * FM_HOME; a second acquire is refused rather than silently sharing the store.
  *
- * The lock is a private file created with O_EXCL, so the create is atomic on a
- * single host. A lock whose recorded process is gone is reclaimed as stale.
+ * Mechanism: the complete owner record is written to a unique sibling file
+ * first and then published with link(2). link is atomic and exclusive on the
+ * supported platforms (Node on Linux and macOS), so a competitor always sees
+ * either no lock or a fully written lock, never the empty metadata window an
+ * O_EXCL create followed by a separate write leaves open. A stale lock is
+ * reclaimed by renaming it to a unique sibling name - rename is atomic, so
+ * exactly one reclaimer wins - and then verifying the claimed record before
+ * removing it. No flock(2) or external lock manager is assumed.
+ *
+ * A lock that exists but carries no valid owner record is treated as live
+ * until it is older than INVALID_LOCK_GRACE_MS: a half-published lock is never
+ * a valid one, and reclaiming it early could hand the store to two owners.
  */
 
-import {
-  closeSync,
-  openSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-  writeSync,
-} from "node:fs";
 import { randomUUID } from "node:crypto";
+import { linkSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+
+/** How long an unreadable lock file is respected before it is reclaimed. */
+export const INVALID_LOCK_GRACE_MS = 30_000;
 
 export type OwnerInfo = {
   homeId: string;
@@ -37,6 +43,11 @@ export class OwnerConflictError extends Error {
 
 type LockFile = OwnerInfo & { nonce: string };
 
+type LockRead =
+  | { kind: "missing" }
+  | { kind: "valid"; info: LockFile }
+  | { kind: "invalid"; ageMs: number };
+
 function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -49,13 +60,7 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function readLock(path: string): LockFile | null {
-  let text: string;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch {
-    return null;
-  }
+function parseLock(text: string): LockFile | null {
   try {
     const parsed = JSON.parse(text) as Partial<LockFile>;
     if (
@@ -71,9 +76,27 @@ function readLock(path: string): LockFile | null {
       };
     }
   } catch {
-    // A corrupt lock is treated as stale below.
+    // A corrupt lock is treated as unreadable below.
   }
   return null;
+}
+
+function readLock(path: string, now: () => number): LockRead {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return { kind: "missing" };
+  }
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(path).mtimeMs;
+  } catch {
+    return { kind: "missing" };
+  }
+  const info = parseLock(text);
+  if (info) return { kind: "valid", info };
+  return { kind: "invalid", ageMs: now() - mtimeMs };
 }
 
 /** A held single-owner store lock. Release it exactly once. */
@@ -94,52 +117,118 @@ export class OwnerLock {
    * Acquire the lock at `path` for `homeId`.
    *
    * Refuses with OwnerConflictError when another live process holds it.
-   * Reclaims a lock whose owner is gone.
+   * Reclaims a lock whose owner is gone, or an unreadable lock older than the
+   * invalid-lock grace period.
    */
   static acquire(path: string, homeId: string, now: () => number = Date.now): OwnerLock {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
       const info: OwnerInfo = { homeId, pid: process.pid, startedAt: now() };
       const nonce = randomUUID();
-      let fd: number;
+      const tmp = `${path}.new.${process.pid}.${nonce}`;
+      writeFileSync(tmp, JSON.stringify({ ...info, nonce }), { mode: 0o600, flag: "wx" });
       try {
-        fd = openSync(path, "wx", 0o600);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        const existing = readLock(path);
-        if (existing && isProcessAlive(existing.pid)) {
-          throw new OwnerConflictError(
-            `store already owned by live process ${existing.pid} for home ${existing.homeId}`,
-          );
-        }
         try {
-          unlinkSync(path);
-        } catch {
-          // Another process may have reclaimed it first; retry once.
+          linkSync(tmp, path);
+          return new OwnerLock(path, info, nonce);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          const current = readLock(path, now);
+          if (current.kind === "valid" && isProcessAlive(current.info.pid)) {
+            throw new OwnerConflictError(
+              `store already owned by live process ${current.info.pid} for home ${current.info.homeId}`,
+            );
+          }
+          if (current.kind === "invalid" && current.ageMs < INVALID_LOCK_GRACE_MS) {
+            throw new OwnerConflictError(
+              `store lock at ${path} exists without readable owner metadata; refusing to reclaim a fresh lock`,
+            );
+          }
+          OwnerLock.claimStale(path, current, nonce, now);
         }
-        continue;
-      }
-      try {
-        const payload: LockFile = { ...info, nonce };
-        writeSync(fd, JSON.stringify(payload));
       } finally {
-        closeSync(fd);
+        try {
+          unlinkSync(tmp);
+        } catch {
+          // Already gone; nothing to clean.
+        }
       }
-      return new OwnerLock(path, info, nonce);
     }
     throw new OwnerConflictError(`could not acquire store lock at ${path}`);
+  }
+
+  /**
+   * Remove one stale lock if this caller wins the atomic rename race.
+   *
+   * Returns after either reclaiming the stale record or losing to another
+   * reclaimer; the caller then retries the link publish.
+   */
+  private static claimStale(path: string, current: LockRead, nonce: string, now: () => number): void {
+    const claimed = `${path}.stale.${nonce}`;
+    try {
+      renameSync(path, claimed);
+    } catch {
+      // Another process reclaimed or released it first; retry the publish.
+      return;
+    }
+    const renamed = readLock(claimed, now);
+    const expectedNonce = current.kind === "valid" ? current.info.nonce : null;
+    if (
+      (expectedNonce === null && renamed.kind !== "valid") ||
+      (expectedNonce !== null && renamed.kind === "valid" && renamed.info.nonce === expectedNonce)
+    ) {
+      try {
+        unlinkSync(claimed);
+      } catch {
+        // Already removed; nothing to do.
+      }
+      return;
+    }
+    // The renamed record is not the one this caller inspected. Never delete
+    // it: put it back best-effort (without clobbering a newer lock) and let
+    // the retry observe the real owner.
+    try {
+      linkSync(claimed, path);
+    } catch {
+      // A newer lock is already in place; leave it.
+    }
+    try {
+      unlinkSync(claimed);
+    } catch {
+      // Already gone.
+    }
   }
 
   /** Release the lock only when this owner still holds it. */
   release(): void {
     if (this.released) return;
     this.released = true;
-    const existing = readLock(this.path);
-    if (existing && existing.pid === this.info.pid && existing.nonce === this.nonce) {
+    const released = `${this.path}.release.${this.nonce}`;
+    try {
+      renameSync(this.path, released);
+    } catch {
+      // Already removed or replaced; nothing to release.
+      return;
+    }
+    const renamed = readLock(released, Date.now);
+    if (renamed.kind === "valid" && renamed.info.nonce === this.nonce) {
       try {
-        unlinkSync(this.path);
+        unlinkSync(released);
       } catch {
         // Already removed; nothing to do.
       }
+      return;
+    }
+    // Another owner's lock was renamed by mistake; restore it without
+    // clobbering a newer lock and leave it held by its real owner.
+    try {
+      linkSync(released, this.path);
+    } catch {
+      // A newer lock is already in place; leave it.
+    }
+    try {
+      unlinkSync(released);
+    } catch {
+      // Already gone.
     }
   }
 }

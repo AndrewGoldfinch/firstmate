@@ -186,12 +186,14 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
     } catch (error) {
       retryCode = (error as { code?: string }).code ?? "error";
     }
+    const outcomes = await readOutcomes(context.outcomeScript, home);
     await sidecar.stop();
     results.push({
       id: "F02",
       title: "after acceptance, before reply",
-      status: record?.state === "accepted" && retryCode === "RECONCILE_REQUIRED" ? "pass" : "fail",
-      detail: `state=${record?.state ?? "absent"} retry=${retryCode}`,
+      status:
+        record?.state === "accepted" && retryCode === "none" && outcomes.length === 1 ? "pass" : "fail",
+      detail: `state=${record?.state ?? "absent"} retry=${retryCode} outcomes=${outcomes.length}`,
     });
   }
 
@@ -315,8 +317,8 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
   }
 
   // F06 - after the outcome effect, before the adapter receipt: reconcile the
-  // missing receipt through the sink read-back, and keep refusing a blind
-  // append when the sink cannot read back.
+  // missing receipt through the keyed append-or-get, and keep refusing a blind
+  // append when the sink cannot complete it.
   {
     const home = caseHome(context, "F06");
     const { sidecar, faux, model } = await startSidecar(home, "receipt.before");
@@ -339,7 +341,7 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
     }
     let blindCode = "none";
     const incapable: OutcomeSink = {
-      async append(): Promise<number> {
+      async appendOrGet(): Promise<number> {
         throw new Error("an incapable sink must never be asked to append");
       },
     };
@@ -375,8 +377,8 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
   }
 
   // F07 - after runtime settlement, before the FirstMate outcome commit: the
-  // settled candidate is reconciled through the sink read-back, which proves the
-  // outcome absent and commits it exactly once.
+  // retry replays the settled candidate and the keyed append-or-get commits it
+  // exactly once, even though its receipt was never recorded.
   {
     const home = caseHome(context, "F07");
     const { sidecar, faux, model } = await startSidecar(home, "dispatch.settle.after");
@@ -396,11 +398,10 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
       status:
         before.length === 0 &&
         reconciled.reconciled === true &&
-        reconciled.replayed === false &&
         outcomes.length === 1
           ? "pass"
           : "fail",
-      detail: `outcomesBeforeRetry=${before.length} reconciled=${reconciled.reconciled === true} appendedOnce=${outcomes.length === 1} seq=${reconciled.seq}`,
+      detail: `outcomesBeforeRetry=${before.length} reconciled=${reconciled.reconciled === true} replayed=${reconciled.replayed} appendedOnce=${outcomes.length === 1} seq=${reconciled.seq}`,
     });
   }
 
@@ -640,9 +641,9 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
     await sidecar.stop();
     results.push({
       id: "F18",
-      title: "store restored into a different home",
-      status: !wrong.ok && wrong.error.code === "HOME_MISMATCH" ? "pass" : "fail",
-      detail: `code=${wrong.ok ? "ok" : wrong.error.code}`,
+      title: "wrong-home request refused (store restore not exercised)",
+      status: !wrong.ok && wrong.error.code === "HOME_MISMATCH" ? "known-gap" : "fail",
+      detail: `code=${wrong.ok ? "ok" : wrong.error.code}; the request carried a different homeId and no store was restored into another home, so the restore boundary remains unexercised`,
     });
   }
 
@@ -660,14 +661,13 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
   const pilot = context.pilot;
   results.push({
     id: "F16",
-    title: "missing credentials or incompatible dependency",
-    status:
-      pilot?.status === "pass" || pilot?.status === "not-covered" ? "pass" : "fail",
+    title: "credential reachability (named failure not injected)",
+    status: pilot?.status === "fail" ? "fail" : "known-gap",
     detail:
       pilot?.status === "pass"
-        ? `a real ${pilot.provider} credential was reachable and used for ${pilot.calls} model calls; unknown-capability refusal covered by the P1B suite`
+        ? `a real ${pilot.provider} credential was reachable and used for ${pilot.calls} model calls; the case never injects a missing credential or an incompatible dependency into the sidecar, so the named failure remains unexercised`
         : pilot?.status === "not-covered"
-          ? `no real credential path was usable and the pilot refused to fabricate results: ${pilot.reason}`
+          ? `no real credential path was usable and the pilot refused to fabricate results: ${pilot.reason}; the named failure is not injected either way`
           : `the real-model pilot failed: ${pilot?.reason ?? "no pilot result"}`,
   });
 
@@ -686,10 +686,10 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
   });
   results.push({
     id: "F17",
-    title: "disposable host reboot",
-    status: laneStatus(lane?.f17?.status),
+    title: "container process/store restart (host reboot not exercised)",
+    status: lane?.f17?.status === "pass" ? "known-gap" : laneStatus(lane?.f17?.status),
     detail: lane?.f17
-      ? `image=${lane.image ?? "unknown"} docker=${lane.dockerServer ?? "unknown"} ${JSON.stringify(lane.f17.evidence)}`
+      ? `image=${lane.image ?? "unknown"} docker=${lane.dockerServer ?? "unknown"} ${JSON.stringify(lane.f17.evidence)}; the container restarted but the host kernel kept running, so a real host reboot remains unexercised`
       : `container lane: ${lane?.reason ?? "not run"}`,
   });
   return results.sort((a, b) => a.id.localeCompare(b.id));

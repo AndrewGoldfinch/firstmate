@@ -228,7 +228,7 @@ test("cancellation persists intent before abort and retains the records", async 
     payload: { task: "T1" },
   });
   assert.equal(redispatch.ok, false);
-  assert.equal(redispatch.ok ? "" : redispatch.error.code, "RECONCILE_REQUIRED");
+  assert.equal(redispatch.ok ? "" : redispatch.error.code, "CONFLICT");
 });
 
 test("a declared read tool may rerun and an undeclared one is refused", async () => {

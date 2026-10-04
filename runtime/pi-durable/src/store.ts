@@ -21,6 +21,7 @@ type OperationRow = {
   supervisor_id: string;
   state: string;
   payload_digest: string;
+  prompt_digest: string;
   config_digest: string;
   row_ids_json: string;
   owner_generation: number | null;
@@ -82,6 +83,7 @@ function toRecord(row: OperationRow): OperationRecord {
       ? (row.state as OperationRecord["state"])
       : "accepted",
     payloadDigest: row.payload_digest,
+    promptDigest: row.prompt_digest ?? "",
     configDigest: row.config_digest,
     rowIds: JSON.parse(row.row_ids_json) as string[],
     ownerGeneration: row.owner_generation,
@@ -125,6 +127,7 @@ export class OperationStore {
         supervisor_id TEXT NOT NULL,
         state TEXT NOT NULL,
         payload_digest TEXT NOT NULL,
+        prompt_digest TEXT NOT NULL DEFAULT '',
         config_digest TEXT NOT NULL,
         row_ids_json TEXT NOT NULL,
         owner_generation INTEGER,
@@ -179,6 +182,9 @@ export class OperationStore {
         this.db.exec(`ALTER TABLE operations ADD COLUMN ${name} TEXT`);
       }
     }
+    if (!columns.has("prompt_digest")) {
+      this.db.exec("ALTER TABLE operations ADD COLUMN prompt_digest TEXT NOT NULL DEFAULT ''");
+    }
   }
 
   /** Add P1B columns to a supervisors table created by an earlier version. */
@@ -216,9 +222,9 @@ export class OperationStore {
       .prepare(
         `INSERT INTO operations (
            operation_id, home_id, supervisor_id, state, payload_digest,
-           config_digest, row_ids_json, owner_generation, wake_claim_id,
-           created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           prompt_digest, config_digest, row_ids_json, owner_generation,
+           wake_claim_id, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.operationId,
@@ -226,6 +232,7 @@ export class OperationStore {
         record.supervisorId,
         record.state,
         record.payloadDigest,
+        record.promptDigest,
         record.configDigest,
         JSON.stringify(record.rowIds),
         record.ownerGeneration,
