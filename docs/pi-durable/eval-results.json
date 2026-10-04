@@ -1,0 +1,978 @@
+{
+  "generatedAt": "2026-10-04T13:59:06.894Z",
+  "environment": "Node v22.21.1; local Linux host; no VM or reboot boundary; deterministic faux model",
+  "arms": {
+    "existing": {
+      "arm": "existing",
+      "scenario": "fleet",
+      "faults": [],
+      "notes": [],
+      "trace": {
+        "outcomes": [
+          {
+            "seq": 1,
+            "epoch": 1791122345,
+            "task": "T1",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=ready_for_review; parser cleanup",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 2,
+            "epoch": 1791122345,
+            "task": "T2",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=surface_failure; retry handling",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 3,
+            "epoch": 1791122345,
+            "task": "T3",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=working; slow test run",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 4,
+            "epoch": 1791122345,
+            "task": "T4",
+            "wake": "",
+            "verdict": "captain",
+            "summary": "disposition=escalate_decision; expired credentials",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 5,
+            "epoch": 1791122345,
+            "task": "T5",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=recover_or_escalate; interrupted analysis",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 6,
+            "epoch": 1791122345,
+            "task": "T6",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=preserve_state; duplicate reports",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          }
+        ],
+        "operations": [
+          {
+            "operationId": "existing:T1",
+            "task": "T1",
+            "state": "settled",
+            "receiptSeq": 1
+          },
+          {
+            "operationId": "existing:T2",
+            "task": "T2",
+            "state": "settled",
+            "receiptSeq": 1
+          },
+          {
+            "operationId": "existing:T3",
+            "task": "T3",
+            "state": "settled",
+            "receiptSeq": 1
+          },
+          {
+            "operationId": "existing:T4",
+            "task": "T4",
+            "state": "settled",
+            "receiptSeq": 1
+          },
+          {
+            "operationId": "existing:T5",
+            "task": "T5",
+            "state": "settled",
+            "receiptSeq": 1
+          },
+          {
+            "operationId": "existing:T6",
+            "task": "T6",
+            "state": "settled",
+            "receiptSeq": 1
+          }
+        ],
+        "effects": [
+          {
+            "effect": "outcome:T1",
+            "operationId": "T1",
+            "owner": "branch",
+            "at": 1791122345130
+          },
+          {
+            "effect": "outcome:T2",
+            "operationId": "T2",
+            "owner": "branch",
+            "at": 1791122345183
+          },
+          {
+            "effect": "outcome:T3",
+            "operationId": "T3",
+            "owner": "branch",
+            "at": 1791122345236
+          },
+          {
+            "effect": "outcome:T4",
+            "operationId": "T4",
+            "owner": "branch",
+            "at": 1791122345287
+          },
+          {
+            "effect": "outcome:T5",
+            "operationId": "T5",
+            "owner": "branch",
+            "at": 1791122345338
+          },
+          {
+            "effect": "outcome:T6",
+            "operationId": "T6",
+            "owner": "branch",
+            "at": 1791122345390
+          }
+        ],
+        "acknowledgements": [],
+        "acceptedRows": [
+          "row-T1",
+          "row-T2",
+          "row-T3",
+          "row-T4",
+          "row-T5",
+          "row-T6"
+        ],
+        "allowedOwners": [
+          "branch"
+        ]
+      }
+    },
+    "pi-durable": {
+      "arm": "pi-durable",
+      "scenario": "fleet",
+      "faults": [],
+      "notes": [
+        "T1: seq=1 replayed=false",
+        "T2: seq=2 replayed=false",
+        "T3: seq=3 replayed=false",
+        "T4: seq=4 replayed=false",
+        "T5: seq=5 replayed=false",
+        "T6: seq=6 replayed=false"
+      ],
+      "trace": {
+        "outcomes": [
+          {
+            "seq": 1,
+            "epoch": 1791122345,
+            "task": "T1",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=ready_for_review; parser cleanup",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 2,
+            "epoch": 1791122345,
+            "task": "T2",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=surface_failure; retry handling",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 3,
+            "epoch": 1791122345,
+            "task": "T3",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=working; slow test run",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 4,
+            "epoch": 1791122345,
+            "task": "T4",
+            "wake": "",
+            "verdict": "captain",
+            "summary": "disposition=escalate_decision; expired credentials",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 5,
+            "epoch": 1791122345,
+            "task": "T5",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=recover_or_escalate; interrupted analysis",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 6,
+            "epoch": 1791122345,
+            "task": "T6",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=preserve_state; duplicate reports",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          }
+        ],
+        "operations": [
+          {
+            "operationId": "fm:/tmp/fm-pi-durable-eval-EyoEjI/arm-durable:supervision:T1:1",
+            "task": "T1",
+            "state": "settled",
+            "receiptSeq": 1
+          },
+          {
+            "operationId": "fm:/tmp/fm-pi-durable-eval-EyoEjI/arm-durable:supervision:T2:1",
+            "task": "T2",
+            "state": "settled",
+            "receiptSeq": 2
+          },
+          {
+            "operationId": "fm:/tmp/fm-pi-durable-eval-EyoEjI/arm-durable:supervision:T3:1",
+            "task": "T3",
+            "state": "settled",
+            "receiptSeq": 3
+          },
+          {
+            "operationId": "fm:/tmp/fm-pi-durable-eval-EyoEjI/arm-durable:supervision:T4:1",
+            "task": "T4",
+            "state": "settled",
+            "receiptSeq": 4
+          },
+          {
+            "operationId": "fm:/tmp/fm-pi-durable-eval-EyoEjI/arm-durable:supervision:T5:1",
+            "task": "T5",
+            "state": "settled",
+            "receiptSeq": 5
+          },
+          {
+            "operationId": "fm:/tmp/fm-pi-durable-eval-EyoEjI/arm-durable:supervision:T6:1",
+            "task": "T6",
+            "state": "settled",
+            "receiptSeq": 6
+          }
+        ],
+        "effects": [
+          {
+            "effect": "outcome:T1",
+            "operationId": "T1",
+            "owner": "branch",
+            "at": 1791122345495
+          },
+          {
+            "effect": "outcome:T2",
+            "operationId": "T2",
+            "owner": "branch",
+            "at": 1791122345553
+          },
+          {
+            "effect": "outcome:T3",
+            "operationId": "T3",
+            "owner": "branch",
+            "at": 1791122345610
+          },
+          {
+            "effect": "outcome:T4",
+            "operationId": "T4",
+            "owner": "branch",
+            "at": 1791122345668
+          },
+          {
+            "effect": "outcome:T5",
+            "operationId": "T5",
+            "owner": "branch",
+            "at": 1791122345723
+          },
+          {
+            "effect": "outcome:T6",
+            "operationId": "T6",
+            "owner": "branch",
+            "at": 1791122345779
+          }
+        ],
+        "acknowledgements": [],
+        "acceptedRows": [
+          "row-T1",
+          "row-T2",
+          "row-T3",
+          "row-T4",
+          "row-T5",
+          "row-T6"
+        ],
+        "allowedOwners": [
+          "branch"
+        ]
+      }
+    },
+    "existingWithFault": {
+      "arm": "existing",
+      "scenario": "fleet-fault-T3",
+      "faults": [
+        "existing owner lost T3 mid-execution"
+      ],
+      "notes": [
+        "T3: lost (in-process execution interrupted)"
+      ],
+      "trace": {
+        "outcomes": [
+          {
+            "seq": 1,
+            "epoch": 1791122345,
+            "task": "T1",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=ready_for_review; parser cleanup",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 2,
+            "epoch": 1791122345,
+            "task": "T2",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=surface_failure; retry handling",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 3,
+            "epoch": 1791122345,
+            "task": "T4",
+            "wake": "",
+            "verdict": "captain",
+            "summary": "disposition=escalate_decision; expired credentials",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 4,
+            "epoch": 1791122345,
+            "task": "T5",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=recover_or_escalate; interrupted analysis",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 5,
+            "epoch": 1791122346,
+            "task": "T6",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=preserve_state; duplicate reports",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          }
+        ],
+        "operations": [
+          {
+            "operationId": "existing:T1",
+            "task": "T1",
+            "state": "settled",
+            "receiptSeq": 1
+          },
+          {
+            "operationId": "existing:T2",
+            "task": "T2",
+            "state": "settled",
+            "receiptSeq": 1
+          },
+          {
+            "operationId": "existing:T3",
+            "task": "T3",
+            "state": "lost",
+            "receiptSeq": null
+          },
+          {
+            "operationId": "existing:T4",
+            "task": "T4",
+            "state": "settled",
+            "receiptSeq": 1
+          },
+          {
+            "operationId": "existing:T5",
+            "task": "T5",
+            "state": "settled",
+            "receiptSeq": 1
+          },
+          {
+            "operationId": "existing:T6",
+            "task": "T6",
+            "state": "settled",
+            "receiptSeq": 1
+          }
+        ],
+        "effects": [
+          {
+            "effect": "outcome:T1",
+            "operationId": "T1",
+            "owner": "branch",
+            "at": 1791122345866
+          },
+          {
+            "effect": "outcome:T2",
+            "operationId": "T2",
+            "owner": "branch",
+            "at": 1791122345917
+          },
+          {
+            "effect": "outcome:T4",
+            "operationId": "T4",
+            "owner": "branch",
+            "at": 1791122345971
+          },
+          {
+            "effect": "outcome:T5",
+            "operationId": "T5",
+            "owner": "branch",
+            "at": 1791122346023
+          },
+          {
+            "effect": "outcome:T6",
+            "operationId": "T6",
+            "owner": "branch",
+            "at": 1791122346077
+          }
+        ],
+        "acknowledgements": [],
+        "acceptedRows": [
+          "row-T1",
+          "row-T2",
+          "row-T3",
+          "row-T4",
+          "row-T5",
+          "row-T6"
+        ],
+        "allowedOwners": [
+          "branch"
+        ]
+      }
+    },
+    "pi-durableWithFault": {
+      "arm": "pi-durable",
+      "scenario": "fleet-fault-model",
+      "faults": [
+        "simulated owner crash at dispatch.model.after"
+      ],
+      "notes": [
+        "T1: unresolved after recovery (operation was accepted but not settled; reconcile before retrying)",
+        "T2: seq=1 replayed=false",
+        "T3: seq=2 replayed=false",
+        "T4: seq=3 replayed=false",
+        "T5: seq=4 replayed=false",
+        "T6: seq=5 replayed=false"
+      ],
+      "trace": {
+        "outcomes": [
+          {
+            "seq": 1,
+            "epoch": 1791122346,
+            "task": "T2",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=surface_failure; retry handling",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 2,
+            "epoch": 1791122346,
+            "task": "T3",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=working; slow test run",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 3,
+            "epoch": 1791122346,
+            "task": "T4",
+            "wake": "",
+            "verdict": "captain",
+            "summary": "disposition=escalate_decision; expired credentials",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 4,
+            "epoch": 1791122346,
+            "task": "T5",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=recover_or_escalate; interrupted analysis",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 5,
+            "epoch": 1791122346,
+            "task": "T6",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=preserve_state; duplicate reports",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          }
+        ],
+        "operations": [
+          {
+            "operationId": "fm:/tmp/fm-pi-durable-eval-EyoEjI/arm-durable-fault:supervision:T1:1",
+            "task": "T1",
+            "state": "accepted",
+            "receiptSeq": null
+          },
+          {
+            "operationId": "fm:/tmp/fm-pi-durable-eval-EyoEjI/arm-durable-fault:supervision:T2:1",
+            "task": "T2",
+            "state": "settled",
+            "receiptSeq": 1
+          },
+          {
+            "operationId": "fm:/tmp/fm-pi-durable-eval-EyoEjI/arm-durable-fault:supervision:T3:1",
+            "task": "T3",
+            "state": "settled",
+            "receiptSeq": 2
+          },
+          {
+            "operationId": "fm:/tmp/fm-pi-durable-eval-EyoEjI/arm-durable-fault:supervision:T4:1",
+            "task": "T4",
+            "state": "settled",
+            "receiptSeq": 3
+          },
+          {
+            "operationId": "fm:/tmp/fm-pi-durable-eval-EyoEjI/arm-durable-fault:supervision:T5:1",
+            "task": "T5",
+            "state": "settled",
+            "receiptSeq": 4
+          },
+          {
+            "operationId": "fm:/tmp/fm-pi-durable-eval-EyoEjI/arm-durable-fault:supervision:T6:1",
+            "task": "T6",
+            "state": "settled",
+            "receiptSeq": 5
+          }
+        ],
+        "effects": [
+          {
+            "effect": "outcome:T2",
+            "operationId": "T2",
+            "owner": "branch",
+            "at": 1791122346178
+          },
+          {
+            "effect": "outcome:T3",
+            "operationId": "T3",
+            "owner": "branch",
+            "at": 1791122346234
+          },
+          {
+            "effect": "outcome:T4",
+            "operationId": "T4",
+            "owner": "branch",
+            "at": 1791122346289
+          },
+          {
+            "effect": "outcome:T5",
+            "operationId": "T5",
+            "owner": "branch",
+            "at": 1791122346344
+          },
+          {
+            "effect": "outcome:T6",
+            "operationId": "T6",
+            "owner": "branch",
+            "at": 1791122346398
+          }
+        ],
+        "acknowledgements": [],
+        "acceptedRows": [
+          "row-T1",
+          "row-T2",
+          "row-T3",
+          "row-T4",
+          "row-T5",
+          "row-T6"
+        ],
+        "allowedOwners": [
+          "branch"
+        ]
+      }
+    }
+  },
+  "grades": {
+    "existing": {
+      "passed": true,
+      "checks": [
+        {
+          "name": "every accepted task has an outcome",
+          "ok": true,
+          "detail": "all tasks settled"
+        },
+        {
+          "name": "no duplicate outcome per task",
+          "ok": true,
+          "detail": "one outcome per task"
+        },
+        {
+          "name": "each disposition matches fixture truth",
+          "ok": true,
+          "detail": "all dispositions correct"
+        },
+        {
+          "name": "verdict preserves decision ownership",
+          "ok": true,
+          "detail": "verdicts correct"
+        },
+        {
+          "name": "no duplicate applied effect",
+          "ok": true,
+          "detail": "no duplicate effects"
+        },
+        {
+          "name": "no stale-owner effect or acknowledgement",
+          "ok": true,
+          "detail": "no stale actions"
+        },
+        {
+          "name": "no lost accepted row",
+          "ok": true,
+          "detail": "no lost rows"
+        },
+        {
+          "name": "no false completion",
+          "ok": true,
+          "detail": "no false completions"
+        },
+        {
+          "name": "every settlement has a delivery receipt",
+          "ok": true,
+          "detail": "all settlements receipted"
+        }
+      ]
+    },
+    "pi-durable": {
+      "passed": true,
+      "checks": [
+        {
+          "name": "every accepted task has an outcome",
+          "ok": true,
+          "detail": "all tasks settled"
+        },
+        {
+          "name": "no duplicate outcome per task",
+          "ok": true,
+          "detail": "one outcome per task"
+        },
+        {
+          "name": "each disposition matches fixture truth",
+          "ok": true,
+          "detail": "all dispositions correct"
+        },
+        {
+          "name": "verdict preserves decision ownership",
+          "ok": true,
+          "detail": "verdicts correct"
+        },
+        {
+          "name": "no duplicate applied effect",
+          "ok": true,
+          "detail": "no duplicate effects"
+        },
+        {
+          "name": "no stale-owner effect or acknowledgement",
+          "ok": true,
+          "detail": "no stale actions"
+        },
+        {
+          "name": "no lost accepted row",
+          "ok": true,
+          "detail": "no lost rows"
+        },
+        {
+          "name": "no false completion",
+          "ok": true,
+          "detail": "no false completions"
+        },
+        {
+          "name": "every settlement has a delivery receipt",
+          "ok": true,
+          "detail": "all settlements receipted"
+        }
+      ]
+    },
+    "existingWithFault": {
+      "passed": false,
+      "checks": [
+        {
+          "name": "every accepted task has an outcome",
+          "ok": false,
+          "detail": "missing outcomes: T3"
+        },
+        {
+          "name": "no duplicate outcome per task",
+          "ok": true,
+          "detail": "one outcome per task"
+        },
+        {
+          "name": "each disposition matches fixture truth",
+          "ok": true,
+          "detail": "all dispositions correct"
+        },
+        {
+          "name": "verdict preserves decision ownership",
+          "ok": true,
+          "detail": "verdicts correct"
+        },
+        {
+          "name": "no duplicate applied effect",
+          "ok": true,
+          "detail": "no duplicate effects"
+        },
+        {
+          "name": "no stale-owner effect or acknowledgement",
+          "ok": true,
+          "detail": "no stale actions"
+        },
+        {
+          "name": "no lost accepted row",
+          "ok": false,
+          "detail": "lost rows: row-T3"
+        },
+        {
+          "name": "no false completion",
+          "ok": true,
+          "detail": "no false completions"
+        },
+        {
+          "name": "every settlement has a delivery receipt",
+          "ok": true,
+          "detail": "all settlements receipted"
+        }
+      ]
+    },
+    "pi-durableWithFault": {
+      "passed": false,
+      "checks": [
+        {
+          "name": "every accepted task has an outcome",
+          "ok": false,
+          "detail": "missing outcomes: T1"
+        },
+        {
+          "name": "no duplicate outcome per task",
+          "ok": true,
+          "detail": "one outcome per task"
+        },
+        {
+          "name": "each disposition matches fixture truth",
+          "ok": true,
+          "detail": "all dispositions correct"
+        },
+        {
+          "name": "verdict preserves decision ownership",
+          "ok": true,
+          "detail": "verdicts correct"
+        },
+        {
+          "name": "no duplicate applied effect",
+          "ok": true,
+          "detail": "no duplicate effects"
+        },
+        {
+          "name": "no stale-owner effect or acknowledgement",
+          "ok": true,
+          "detail": "no stale actions"
+        },
+        {
+          "name": "no lost accepted row",
+          "ok": true,
+          "detail": "no lost rows"
+        },
+        {
+          "name": "no false completion",
+          "ok": true,
+          "detail": "no false completions"
+        },
+        {
+          "name": "every settlement has a delivery receipt",
+          "ok": true,
+          "detail": "all settlements receipted"
+        }
+      ]
+    }
+  },
+  "negativeControls": [
+    {
+      "name": "drop one accepted row",
+      "rejected": true
+    },
+    {
+      "name": "inject a second effect",
+      "rejected": true
+    },
+    {
+      "name": "forge a completion without a receipt",
+      "rejected": true
+    },
+    {
+      "name": "change the owner of an acknowledgement",
+      "rejected": true
+    }
+  ],
+  "matrix": [
+    {
+      "id": "F01",
+      "title": "before runtime acceptance",
+      "status": "pass",
+      "detail": "crashed=true absentAfterCrash=true retrySeq=1"
+    },
+    {
+      "id": "F02",
+      "title": "after acceptance, before reply",
+      "status": "pass",
+      "detail": "state=accepted retry=RECONCILE_REQUIRED"
+    },
+    {
+      "id": "F03",
+      "title": "conversation identity across restart",
+      "status": "pass",
+      "detail": "conversationId=2 recovered=2"
+    },
+    {
+      "id": "F04",
+      "title": "during a model response",
+      "status": "pass",
+      "detail": "state=accepted outcomes=0"
+    },
+    {
+      "id": "F05",
+      "title": "during a declared safe read",
+      "status": "not-covered",
+      "detail": "the prototype has no read-tool boundary to rerun"
+    },
+    {
+      "id": "F06",
+      "title": "after unsafe effect, before receipt commit",
+      "status": "pass",
+      "detail": "replay=RECONCILE_REQUIRED outcomes=1"
+    },
+    {
+      "id": "F07",
+      "title": "after runtime settlement, before FirstMate outcome commit",
+      "status": "known-gap",
+      "detail": "the settled candidate is replayable, but the adapter cannot prove the outcome effect is absent, so it refuses a blind append and requires reconciliation"
+    },
+    {
+      "id": "F08",
+      "title": "after outcome commit, before adapter receipt",
+      "status": "pass",
+      "detail": "replayed=true seq=1/1 outcomes=1"
+    },
+    {
+      "id": "F09",
+      "title": "after delivery, before acknowledgement",
+      "status": "not-covered",
+      "detail": "the existing routine-note delivery limitation is documented, not re-tested here"
+    },
+    {
+      "id": "F10",
+      "title": "stale generation cannot mutate",
+      "status": "pass",
+      "detail": "code=AUTHORITY_STALE"
+    },
+    {
+      "id": "F11",
+      "title": "service crash with valid generation",
+      "status": "not-covered",
+      "detail": "covered by F02/F04 recovery; a real process crash needs the VM lane"
+    },
+    {
+      "id": "F12",
+      "title": "cancellation during tool execution",
+      "status": "not-covered",
+      "detail": "the prototype has no cancellation operation"
+    },
+    {
+      "id": "F13",
+      "title": "second owner refused",
+      "status": "pass",
+      "detail": "refused=true"
+    },
+    {
+      "id": "F14",
+      "title": "observer reconnect recovers settlement",
+      "status": "pass",
+      "detail": "settlements=1"
+    },
+    {
+      "id": "F15",
+      "title": "changed payload under repeated ID",
+      "status": "pass",
+      "detail": "code=CONFLICT"
+    },
+    {
+      "id": "F16",
+      "title": "missing credentials or incompatible dependency",
+      "status": "not-covered",
+      "detail": "a real credential provider is unavailable; the unknown-capability refusal is covered by the P1B suite"
+    },
+    {
+      "id": "F17",
+      "title": "disposable host reboot",
+      "status": "not-covered",
+      "detail": "no VM or reboot boundary exists in this environment"
+    },
+    {
+      "id": "F18",
+      "title": "store restored into a different home",
+      "status": "pass",
+      "detail": "code=HOME_MISMATCH"
+    }
+  ]
+}

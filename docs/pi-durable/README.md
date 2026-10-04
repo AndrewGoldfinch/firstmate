@@ -11,5 +11,6 @@ Read in order:
 3. [Implementation plan](03-implementation-plan.md) - source verification, prototype work packages, fault matrix, evaluation, rollback, and later rollout.
 4. [Evaluation harness](04-evaluation-harness.md) - controlled fleet problem, shared test environment, independent grading, A/B protocol, and benefit scorecard.
 5. [Project agent guidance](AGENTS.md) - project-specific guidance linked from the fork's root agent instructions.
+6. [Evaluation report](06-evaluation-report.md) - deterministic P2 harness results, the grader scorecard, and the honest limitations.
 
 FirstMate-facing interfaces and file additions are proposals. The package does not claim repository implementation, full source audit, or executed prototype tests. Pin and verify current FirstMate and Pi dependencies during P0.

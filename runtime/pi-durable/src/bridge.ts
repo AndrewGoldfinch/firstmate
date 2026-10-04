@@ -123,8 +123,16 @@ export async function runDurableDispatch(
   if (!dispatched.ok) {
     throw new BridgeError(dispatched.code, dispatched.message);
   }
-  if (dispatched.receipt) {
-    return { seq: dispatched.receipt.seq, replayed: true };
+  if (dispatched.replayed) {
+    if (dispatched.receipt) {
+      return { seq: dispatched.receipt.seq, replayed: true };
+    }
+    // Settled but no committed receipt: the effect may or may not have been
+    // applied. Refuse a blind append and require reconciliation.
+    throw new BridgeError(
+      "RECONCILE_REQUIRED",
+      "settled result has no committed outcome receipt; reconcile before retrying",
+    );
   }
   const candidate = parseCandidateResult(dispatched.result);
   const seq = await deps.sink.append(candidate);

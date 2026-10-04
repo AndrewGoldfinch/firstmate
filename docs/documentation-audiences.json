@@ -413,6 +413,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/06-evaluation-report.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },

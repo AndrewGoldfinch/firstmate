@@ -61,6 +61,12 @@ export type SidecarOptions = {
   maxOutstanding?: number;
   /** Register model providers before any supervision execution. */
   configureModels?: ModelConfigurer;
+  /**
+   * Test-only fault seam: called at named persistence and effect boundaries so
+   * the evaluation harness can pause or crash an owner deterministically
+   * instead of relying on timing. Production callers leave it unset.
+   */
+  barriers?: (name: string) => void | Promise<void>;
   now?: () => number;
 };
 
@@ -83,6 +89,7 @@ export class DurableSidecar {
   private readonly maxMessageBytes: number;
   private readonly maxOutstanding: number;
   private readonly now: () => number;
+  private readonly barriers: (name: string) => void | Promise<void>;
   private outstanding = 0;
   private stopping: Promise<void> | null = null;
 
@@ -100,6 +107,7 @@ export class DurableSidecar {
     maxMessageBytes: number;
     maxOutstanding: number;
     now: () => number;
+    barriers: (name: string) => void | Promise<void>;
   }) {
     this.homeId = init.homeId;
     this.stateDir = init.stateDir;
@@ -114,6 +122,7 @@ export class DurableSidecar {
     this.maxMessageBytes = init.maxMessageBytes;
     this.maxOutstanding = init.maxOutstanding;
     this.now = init.now;
+    this.barriers = init.barriers;
   }
 
   static async start(options: SidecarOptions): Promise<DurableSidecar> {
@@ -128,8 +137,7 @@ export class DurableSidecar {
     mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     chmodSync(stateDir, 0o700);
 
-    const lock = OwnerLock.acquire(join(stateDir, "store.lock"), homeId, now);
-    const storePath = options.storePath ?? join(stateDir, "operations.sqlite");
+    const lock = OwnerLock.acquire(join(stateDir, "store.lock"), homeId, now);    const storePath = options.storePath ?? join(stateDir, "operations.sqlite");
     const runtimeStorePath = options.runtimeStorePath ?? join(stateDir, "runtime.sqlite");
     const socketPath = options.socketPath ?? join(stateDir, "sidecar.sock");
 
@@ -164,6 +172,7 @@ export class DurableSidecar {
         maxMessageBytes,
         maxOutstanding,
         now,
+        barriers: options.barriers ?? (() => {}),
       });
 
       server = createServer((socket) => instance.accept(socket));
@@ -419,6 +428,11 @@ export class DurableSidecar {
    * return its candidate result. A settled repeat returns the original result;
    * an accepted-but-unsettled repeat requires reconciliation.
    */
+  /** Fire the test-only barrier seam at a named boundary. */
+  private async barrier(name: string): Promise<void> {
+    await this.barriers(name);
+  }
+
   private async dispatchOperation(request: DispatchRequest) {
     const binding = this.authorize(request);
     const payloadDigest = digestOf(request.payload);
@@ -456,8 +470,11 @@ export class DurableSidecar {
       createdAt: at,
       updatedAt: at,
     };
+    await this.barrier("dispatch.accept.before");
     this.store.insertOperation(record);
     this.recordObservation("accepted", request.operationId, { state: "accepted" });
+    await this.barrier("dispatch.accept.after");
+    await this.barrier("dispatch.model.before");
     let result: JsonValue;
     try {
       result = await this.provider.runSupervision({
@@ -471,8 +488,10 @@ export class DurableSidecar {
       this.recordObservation("unresolved", request.operationId, { state: "accepted", error: message });
       throw error;
     }
+    await this.barrier("dispatch.model.after");
     this.store.settleOperation(request.operationId, result, this.now());
     this.recordObservation("settlement", request.operationId, result);
+    await this.barrier("dispatch.settle.after");
     const settled = this.store.getOperation(request.operationId) ?? record;
     return { record: settled, result, replayed: false };
   }
@@ -541,7 +560,7 @@ export class DurableSidecar {
   }
 
   /** Record the mirrored outcome receipt for an operation. Idempotent. */
-  private receipt(request: ReceiptRequest) {
+  private async receipt(request: ReceiptRequest) {
     const existing = this.store.getOperation(request.operationId);
     if (!existing) {
       throw new ProtocolError("NOT_FOUND", "unknown operation");
@@ -549,7 +568,9 @@ export class DurableSidecar {
     if (existing.receipt && existing.receipt.seq !== request.seq) {
       throw new ProtocolError("CONFLICT", "operation already has a different outcome receipt");
     }
+    await this.barrier("receipt.before");
     this.store.recordReceipt(request.operationId, request.seq, this.now());
+    await this.barrier("receipt.after");
     return { recorded: true as const };
   }
 

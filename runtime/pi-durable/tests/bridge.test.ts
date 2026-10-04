@@ -111,6 +111,22 @@ test("a settled repeat with a receipt appends nothing", async () => {
   assert.deepEqual(receipts, []);
 });
 
+test("a settled repeat without a receipt is refused rather than blindly appended", async () => {
+  const { transport, receipts } = fakeTransport({
+    ok: true,
+    result: { task: "task-1", verdict: "routine", summary: "all clear" },
+    replayed: true,
+    receipt: null,
+  });
+  const { sink, appended } = fakeSink();
+  await assert.rejects(
+    () => runDurableDispatch({ transport, sink }, { operationId: "op-1", prompt: "p", payload: {} }),
+    (error: unknown) => error instanceof BridgeError && error.code === "RECONCILE_REQUIRED",
+  );
+  assert.deepEqual(appended, []);
+  assert.deepEqual(receipts, []);
+});
+
 test("a malformed sidecar result is refused before the outcome is appended", async () => {
   const { transport } = fakeTransport({
     ok: true,
