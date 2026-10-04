@@ -128,13 +128,16 @@ No P0 experiment items remain open.
 
 `bin/fm-test-run.sh tests/fm-branch-supervision.test.sh tests/fm-pi-branch-extension.test.sh` -> `total=2 failed=0` (2026-10-03).
 
+Lint `bin/fm-lint.sh` -> passes in changed-file mode.
+
+Full-suite baseline `bin/fm-test-run.sh --all` (2026-10-03): **incomplete and environment-limited.** The walk ran 235 of 236 tests and the runner stopped before its summary (last test `fm-wake-queue.test.sh` began with no end). 12 tests failed: `fm-calm-pi-extension`, `fm-composer-codex-idle-live-e2e`, `fm-documentation-audiences`, `fm-git-strip-ai-trailers`, `fm-lint`, `fm-omp-harness`, `fm-procevent`, `fm-remote-job-orphan-reap`, `fm-session-lock-ancestry`, `fm-teardown-endpoint-safety`, `fm-teardown`, `fm-test-run`. Re-run individually, the failures are environment causes rather than branch causes: `fm-test-run` fails on `comm: file 2 is not in sorted order` (locale collation); `fm-lint` fails on missing per-root RSS telemetry; the rest are live-harness opt-in, secondmate, or forge tests unsupported in this bare checkout. `fm-documentation-audiences` fails only because the experiment docs are not yet classified - which the P1A branch's `docs/documentation-audiences.json` change fixes. Conclusion: no P0-relevant branch defect; do not treat this walk as a clean baseline.
+
 ## Open P0 items
 
-1. Record the full-suite (`--all`) baseline result in `development.md` (running at the time of writing; lint passes in changed-file mode and the two named tests pass).
-2. Confirm the P1C configuration syntax against `docs/configuration.md` conventions.
-3. Decide which of R4/R5/R9/R10 need adapter-owned contracts versus upstream guarantees (R5 conflict-refusal and the store-owner lock are confirmed adapter work).
+1. Confirm the P1C configuration syntax against `docs/configuration.md` conventions.
+2. Decide which of R4/R5/R9/R10 need adapter-owned contracts versus upstream guarantees (R5 conflict-refusal and the store-owner lock are confirmed adapter work).
 
-The upstream source commit is pinned; the deterministic Durable experiments are complete.
+The upstream source commit is pinned; the deterministic Durable experiments are complete; the full-suite baseline is recorded (environment-limited, incomplete).
 
 ## Honest status
 
