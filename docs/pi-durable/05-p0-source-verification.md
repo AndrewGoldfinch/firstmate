@@ -16,9 +16,11 @@ It makes no claim of prototype implementation or of executed Durable integration
 | `@earendil-works/pi-coding-agent` | 1.0.0 |
 | `@earendil-works/pi-durable` | 1.0.1 (repository `github.com/earendil-works/pi`) |
 | `@earendil-works/pi-ai` / `@earendil-works/chord` | 1.0.1 / 1.0.1 |
+| Upstream Pi source commit (all three) | `a7229ddc21810d6245105978033b7df645ecc2f7` |
+| Node engine requirement | `>=22.19.0` (running Node 22.21.1) |
 | ShellCheck / actionlint | 0.11.0 / 1.7.12 |
 
-The upstream source commit inside `github.com/earendil-works/pi` is **not yet pinned**; the npm package version is pinned (see "Pi Durable API mapping").
+The upstream source commit inside `github.com/earendil-works/pi` is pinned above (`a7229ddc`).
 
 ## Entry-point verification
 
@@ -105,11 +107,22 @@ Run with Pi's faux provider (`fauxProvider` + `fauxAssistantMessage`), so no rea
 
 **Consequence for R5:** Durable's `requestId` dedup does **not** refuse a changed payload under the same ID — it silently returns the original. The adapter must store and compare a payload/configuration digest and refuse a mismatch itself.
 
-Still open (each needs a small deterministic experiment against the pinned revision):
+### Cancellation, observation, and storage (2026-10-03)
 
-- cancellation scope for foreground and background ownership, including process-group termination;
-- observation/reconnect/cursor/snapshot APIs and event durability;
-- SQLite durability settings and the supported JavaScript runtime range.
+| Check | Result |
+| --- | --- |
+| `root.abort(context)` during an in-flight tool | the tool's `Context` received an abort signal and the submission settled `unanswered` with reason `aborted` |
+| Cancellation is cooperative | abort reaches the tool through `context.abortSignal`; a raw child process must be terminated by the tool/adapter, not implied by abort |
+| `viewState()` snapshot | keys `conversation, entries, docs`; live `subscribe` delivered updates across a submit |
+| Reconnect to the view | a fresh `viewState()` returns the committed transcript as a snapshot (no retained replay needed) |
+| SQLite durability (documented) | single file, WAL, `synchronous = NORMAL`: commits survive process crashes, the newest may be lost on power or host failure |
+| SQLite options | `walAutoCheckpointPages` (default 1000), `busyTimeoutMs` (default 5000) |
+| Cross-process ownership | none by design: "One process owns a storage at a time; there is no cross-process locking" - so the adapter's store-owner lock is required |
+| JS runtime | Node `>=22.19.0`; uses built-in `node:sqlite` (emits `ExperimentalWarning`); 22.21.1 works |
+
+**Consequences:** cancellation is context-cooperative, so the adapter must verify owned process termination itself. Observation is snapshot-plus-operations with no replay log (matching the design's warning), so the adapter's own outbox/receipts must carry settlement across gaps. Storage is durable across process crashes but not power loss (`synchronous = NORMAL`) and offers no cross-process lock.
+
+No P0 experiment items remain open.
 
 ## Baseline test capture
 
@@ -117,13 +130,13 @@ Still open (each needs a small deterministic experiment against the pinned revis
 
 ## Open P0 items
 
-1. Pin the upstream source commit inside `github.com/earendil-works/pi` (npm versions are pinned; the git commit is not).
-2. Finish the deterministic Durable experiments: cancellation scope, observation/reconnect, SQLite durability settings. (`requestId` dedup/replay/ungraceful-reopen are verified; the changed-payload conflict must be enforced by the adapter.)
-3. Record full-suite (`--all`) baseline results in `development.md` (lint verified in changed-file mode; the two named tests pass).
-4. Confirm the P1C configuration syntax against `docs/configuration.md` conventions.
-5. Decide which of R4/R5/R9/R10 need adapter-owned contracts versus upstream guarantees, and implement the adapter store-owner lock that the default SQLite storage does not provide.
+1. Record the full-suite (`--all`) baseline result in `development.md` (running at the time of writing; lint passes in changed-file mode and the two named tests pass).
+2. Confirm the P1C configuration syntax against `docs/configuration.md` conventions.
+3. Decide which of R4/R5/R9/R10 need adapter-owned contracts versus upstream guarantees (R5 conflict-refusal and the store-owner lock are confirmed adapter work).
+
+The upstream source commit is pinned; the deterministic Durable experiments are complete.
 
 ## Honest status
 
-Verified: entry-point existence and roles; the existing outcome/lease/prompt/dispatch contracts; toolchain pins; the two named supervision-branch tests pass; the Pi Durable library API surface, offline `Harness.open` + root creation, `resume` presence, the absence of a default exclusive store lock, `requestId` dedup within and across a restart, graceful reopen with stable root identity, tool `replay` behavior across an ungraceful SIGKILL (safe reruns, unsafe is not rerun and is reported interrupted), continuation after that crash, and the fact that a changed payload under a reused `requestId` is **not** refused by Durable.
-Not verified: cancellation and cleanup scope, observation/reconnect, SQLite durability settings; and no prototype code or Durable integration test has been written or run.
+Verified: entry-point existence and roles; the existing outcome/lease/prompt/dispatch contracts; toolchain pins; the two named supervision-branch tests pass; the Pi Durable library API surface, offline `Harness.open` + root creation, `resume` presence, the absence of a default exclusive store lock, `requestId` dedup within and across a restart, graceful reopen with stable root identity, tool `replay` behavior across an ungraceful SIGKILL (safe reruns, unsafe is not rerun and is reported interrupted), continuation after that crash, cooperative cancellation via `root.abort`, snapshot observation with reconnect, SQLite durability settings, the Node runtime floor, and the fact that a changed payload under a reused `requestId` is **not** refused by Durable.
+Not verified: no prototype code or Durable integration test has been written or run; the full-suite baseline is still running.

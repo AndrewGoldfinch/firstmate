@@ -34,6 +34,8 @@ git -C <dir> checkout -B experiment/pi-durable-supervision origin/experiment/pi-
 | `@earendil-works/pi-ai` / `@earendil-works/chord` | 1.0.1 / 1.0.1 | Durable dependencies |
 | ShellCheck | 0.11.0 | `bin/fm-lint.sh --required-version`; installed at `~/.local/bin/shellcheck` |
 | actionlint | 1.7.12 | `bin/fm-lint-workflows.sh --required-version`; installed at `~/.local/bin/actionlint` |
+| Upstream Pi commit (durable/ai/chord) | `a7229ddc21810d6245105978033b7df645ecc2f7` | `gitHead` of all three 1.0.1 packages |
+| Node engine floor | `>=22.19.0` | declared by `@earendil-works/pi-durable` |
 
 There is no repository build step: FirstMate is bash `bin/` scripts plus TypeScript Pi extensions under `.pi/` that the Pi runtime loads directly.
 
