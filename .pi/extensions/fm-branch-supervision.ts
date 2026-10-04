@@ -132,6 +132,11 @@ import {
   classifyFirstmateOperationalText,
   encodeFirstmateOperationalInputWith,
 } from "./lib/fm-operational-input.ts";
+import {
+  readExecutionProvider,
+  runDurableBranch,
+  type ExecutionProvider,
+} from "./lib/fm-execution-provider.ts";
 
 const extensionFile = fileURLToPath(import.meta.url);
 const extensionDir = dirname(extensionFile);
@@ -151,6 +156,16 @@ const wakeGrantScript = join(fmRoot, "bin", "fm-wake-grant.sh");
 const loadedMarker = join(state, ".pi-branch-extension-loaded");
 const modelPinFile = join(config, "supervision-branch-model");
 const effortPinFile = join(config, "supervision-branch-effort");
+const durableBridgeCli =
+  process.env.FM_SUPERVISION_BRIDGE_CLI || join(fmRoot, "runtime", "pi-durable", "src", "bridge-cli.ts");
+const durableSocketPath = join(state, "pi-durable", "sidecar.sock");
+// Provider selection is immutable for the life of the session, matching the
+// "provider selection becomes immutable for each accepted operation" contract.
+let cachedExecutionProvider: ExecutionProvider | null = null;
+function executionProvider(): ExecutionProvider {
+  if (cachedExecutionProvider === null) cachedExecutionProvider = readExecutionProvider(config);
+  return cachedExecutionProvider;
+}
 
 // Same tool set in the same order on every request (part of the cached
 // prefix). "bash" resolves to the customTools override below, which injects
@@ -1553,8 +1568,26 @@ ${context.command}
         // lets this prompt proceed; the guarded scripts revalidate, and the
         // durable queue keeps every row (bin/fm-lease-lib.sh role-partition).
         const postureTail = afk ? await awayPostureTail() : "";
+        const wakePrompt = branchWakePrompt(message, "fm_branch_report", postureTail);
         try {
-          await session.prompt(branchWakePrompt(message, "fm_branch_report", postureTail));
+          if (executionProvider() === "pi-durable") {
+            await runDurableBranch(durableBridgeCli, {
+              socketPath: durableSocketPath,
+              homeId: fmHome,
+              supervisorId: "pi-supervisor",
+              capabilityProfile: "supervision-observe-v1",
+              ownerGeneration: acceptedGeneration,
+              wakeClaimId: `gen-${acceptedGeneration}`,
+              rowIds: scope.eligibleSeqs.map(String),
+              operationId: `fm:${fmHome}:supervision:gen-${acceptedGeneration}:${acceptedGeneration}`,
+              prompt: wakePrompt,
+              payload: { rows: scope.eligibleSeqs, generation: acceptedGeneration },
+              outcomeScript,
+            });
+            durableReportRevision += 1;
+          } else {
+            await session.prompt(wakePrompt);
+          }
         } finally {
           wakeTaskScope = null;
         }

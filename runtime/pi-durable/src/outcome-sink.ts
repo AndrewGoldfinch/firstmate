@@ -19,12 +19,12 @@ export type OutcomeSinkOptions = {
 /** Build an outcome sink that appends through `bin/fm-branch-outcome.sh`. */
 export function createOutcomeSink(options: OutcomeSinkOptions): OutcomeSink {
   return {
-    async append(result: CandidateResult, task: string): Promise<number> {
+    async append(result: CandidateResult): Promise<number> {
       const args = [
         options.scriptPath,
         "append",
         "--task",
-        task,
+        result.task,
         "--verdict",
         result.verdict,
         "--summary",

@@ -59,6 +59,7 @@ install_pi_branch_extension_fixture() {
   cp "$ROOT/.pi/extensions/lib/fm-branch-model-picker.ts" "$repo/.pi/extensions/lib/fm-branch-model-picker.ts"
   cp "$ROOT/.pi/extensions/lib/fm-calm-visibility.ts" "$repo/.pi/extensions/lib/fm-calm-visibility.ts"
   cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$repo/.pi/extensions/lib/fm-operational-input.ts"
+  cp "$ROOT/.pi/extensions/lib/fm-execution-provider.ts" "$repo/.pi/extensions/lib/fm-execution-provider.ts"
   mkdir -p "$repo/bin"
   cp "$ROOT/bin/fm-operational-input.sh" "$repo/bin/fm-operational-input.sh"
   chmod +x "$repo/bin/fm-operational-input.sh"
@@ -5240,6 +5241,7 @@ test_outcomes_tool_uses_stock_execution_and_export_consumers() {
   cp "$ROOT/.pi/extensions/lib/fm-branch-model-picker.ts" "$fixture/.pi/extensions/lib/fm-branch-model-picker.ts"
   cp "$ROOT/.pi/extensions/lib/fm-calm-visibility.ts" "$fixture/.pi/extensions/lib/fm-calm-visibility.ts"
   cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$fixture/.pi/extensions/lib/fm-operational-input.ts"
+  cp "$ROOT/.pi/extensions/lib/fm-execution-provider.ts" "$fixture/.pi/extensions/lib/fm-execution-provider.ts"
   ln -s "$package_dir" "$fixture/node_modules/@earendil-works/pi-coding-agent"
   ln -s "$package_dir/node_modules/@earendil-works/pi-tui" "$fixture/node_modules/@earendil-works/pi-tui"
   ln -s "$package_dir/node_modules/@earendil-works/pi-ai" "$fixture/node_modules/@earendil-works/pi-ai"
@@ -5949,6 +5951,45 @@ EOF
   pass "an extension-registered provider resolves in the isolated branch runtime"
 }
 
+test_durable_provider_selection_routes_through_the_bridge() {
+  local repo home stub out status
+  repo="$TMP_ROOT/durable-root"
+  home="$TMP_ROOT/durable-home"
+  stub="$TMP_ROOT/durable-bridge-cli.mjs"
+  mkdir -p "$home/state" "$home/config"
+  install_pi_branch_extension_fixture "$repo"
+  printf 'pi-durable\n' > "$home/config/supervision-execution"
+  cat > "$stub" <<'JS'
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+readFileSync(0, "utf8");
+const seq = execFileSync("bash", [`${process.env.FM_ROOT_OVERRIDE}/bin/fm-branch-outcome.sh`, "append", "--task", "fleet", "--verdict", "routine", "--summary", "durable path report"], { encoding: "utf8" }).trim();
+process.stdout.write(`${JSON.stringify({ seq: Number(seq), replayed: false })}\n`);
+JS
+  PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_SUPERVISION_BRIDGE_CLI="$stub" DRIVER_PRELUDE="$DRIVER_PRELUDE" node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
+const prelude = process.env.DRIVER_PRELUDE;
+await eval(`(async () => { ${prelude}; globalThis.__t = { dispatch, fire, home, outcomeScript, defaultSessionCtx }; })()`);
+const { dispatch, fire, home, outcomeScript, defaultSessionCtx } = globalThis.__t;
+import { existsSync, readFileSync } from "node:fs";
+await fire("session_start", {}, defaultSessionCtx);
+const promptsBefore = (globalThis.__fmPrompts ?? []).length;
+const offer = dispatch("signal: durable task wake");
+if (!offer.accepted) throw new Error("durable wake was refused");
+await offer.settlement;
+if ((globalThis.__fmPrompts ?? []).length !== promptsBefore) throw new Error("the durable path must not run the in-process branch prompt");
+if (!existsSync(`${home}/state/branch-outcomes.jsonl`)) throw new Error("the durable path appended no outcome");
+const rows = outcomeScript(["list", "--recent", "50"]).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+if (!rows.some((row) => row.summary === "durable path report" && row.verdict === "routine")) throw new Error("the durable outcome did not reach the existing sink");
+if (readFileSync(`${home}/state/branch-outcomes.jsonl`, "utf8").trim().split("\n").length !== 1) throw new Error("the durable path committed more than one outcome for one wake");
+process.exit(0);
+EOF
+  status=$?
+  out=$(cat "$TMP_ROOT/node-output")
+  expect_code 0 "$status" "a pi-durable selection must route the wake through the bridge and the existing outcome sink: $out"
+  pass "a pi-durable provider selection routes a wake through the bridge into the existing outcome sink"
+}
+
 test_outcomes_tool_call_headers_follow_the_loaded_pi_version
 test_outcomes_tool_uses_stock_execution_and_export_consumers
 test_real_pi_picker_primitives_stay_bounded_and_searchable
@@ -5999,3 +6040,4 @@ test_delivery_keeps_the_event_loop_live_and_ordered
 test_session_replacement_during_delivery_neither_loses_nor_duplicates
 test_store_failure_during_delivery_neither_loses_nor_duplicates
 test_mark_read_failure_keeps_routine_redelivery_and_captain_deduplication
+test_durable_provider_selection_routes_through_the_bridge

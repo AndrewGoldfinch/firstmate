@@ -29,8 +29,8 @@ function fakeTransport(outcome: DispatchOutcome) {
 function fakeSink() {
   const appended: { summary: string; task: string }[] = [];
   const sink: OutcomeSink = {
-    async append(result, task) {
-      appended.push({ summary: result.summary, task });
+    async append(result) {
+      appended.push({ summary: result.summary, task: result.task });
       return appended.length;
     },
   };
@@ -38,13 +38,20 @@ function fakeSink() {
 }
 
 test("a valid candidate result is parsed strictly", () => {
-  assert.deepEqual(parseCandidateResult({ verdict: "routine", summary: "ok" }), {
+  assert.deepEqual(parseCandidateResult({ task: "task-1", verdict: "routine", summary: "ok" }), {
+    task: "task-1",
     verdict: "routine",
     summary: "ok",
   });
   assert.deepEqual(
-    parseCandidateResult({ verdict: "captain", summary: "needs a call", wake: "heartbeat", silent: true }),
-    { verdict: "captain", summary: "needs a call", wake: "heartbeat", silent: true },
+    parseCandidateResult({
+      task: "fleet",
+      verdict: "captain",
+      summary: "needs a call",
+      wake: "heartbeat",
+      silent: true,
+    }),
+    { task: "fleet", verdict: "captain", summary: "needs a call", wake: "heartbeat", silent: true },
   );
 });
 
@@ -53,12 +60,14 @@ test("a malformed candidate result is refused with a diagnosable reason", () => 
     null,
     [],
     "text",
-    { verdict: "other", summary: "x" },
-    { verdict: "routine" },
-    { verdict: "routine", summary: "" },
-    { verdict: "routine", summary: "x", wake: 1 },
-    { verdict: "routine", summary: "x", silent: "yes" },
-    { verdict: "routine", summary: "x", extra: true },
+    { verdict: "routine", summary: "ok" },
+    { task: "", verdict: "routine", summary: "ok" },
+    { task: "t", verdict: "other", summary: "x" },
+    { task: "t", verdict: "routine" },
+    { task: "t", verdict: "routine", summary: "" },
+    { task: "t", verdict: "routine", summary: "x", wake: 1 },
+    { task: "t", verdict: "routine", summary: "x", silent: "yes" },
+    { task: "t", verdict: "routine", summary: "x", extra: true },
   ];
   for (const value of cases) {
     assert.throws(
@@ -71,14 +80,14 @@ test("a malformed candidate result is refused with a diagnosable reason", () => 
 test("a first dispatch appends the outcome and records the receipt", async () => {
   const { transport, receipts } = fakeTransport({
     ok: true,
-    result: { verdict: "routine", summary: "all clear" },
+    result: { task: "task-1", verdict: "routine", summary: "all clear" },
     replayed: false,
     receipt: null,
   });
   const { sink, appended } = fakeSink();
   const result = await runDurableDispatch(
     { transport, sink },
-    { operationId: "op-1", task: "task-1", prompt: "p", payload: {} },
+    { operationId: "op-1", prompt: "p", payload: {} },
   );
   assert.deepEqual(result, { seq: 1, replayed: false });
   assert.deepEqual(appended, [{ summary: "all clear", task: "task-1" }]);
@@ -88,14 +97,14 @@ test("a first dispatch appends the outcome and records the receipt", async () =>
 test("a settled repeat with a receipt appends nothing", async () => {
   const { transport, receipts } = fakeTransport({
     ok: true,
-    result: { verdict: "routine", summary: "all clear" },
+    result: { task: "task-1", verdict: "routine", summary: "all clear" },
     replayed: true,
     receipt: { seq: 4 },
   });
   const { sink, appended } = fakeSink();
   const result = await runDurableDispatch(
     { transport, sink },
-    { operationId: "op-1", task: "task-1", prompt: "p", payload: {} },
+    { operationId: "op-1", prompt: "p", payload: {} },
   );
   assert.deepEqual(result, { seq: 4, replayed: true });
   assert.deepEqual(appended, []);
@@ -111,7 +120,7 @@ test("a malformed sidecar result is refused before the outcome is appended", asy
   });
   const { sink, appended } = fakeSink();
   await assert.rejects(
-    () => runDurableDispatch({ transport, sink }, { operationId: "op-1", task: "t", prompt: "p", payload: {} }),
+    () => runDurableDispatch({ transport, sink }, { operationId: "op-1", prompt: "p", payload: {} }),
     (error: unknown) => error instanceof BridgeError && error.code === "MALFORMED_RESULT",
   );
   assert.deepEqual(appended, []);
@@ -121,7 +130,7 @@ test("a sidecar refusal is surfaced as a bridge error", async () => {
   const { transport } = fakeTransport({ ok: false, code: "AUTHORITY_STALE", message: "stale" });
   const { sink, appended } = fakeSink();
   await assert.rejects(
-    () => runDurableDispatch({ transport, sink }, { operationId: "op-1", task: "t", prompt: "p", payload: {} }),
+    () => runDurableDispatch({ transport, sink }, { operationId: "op-1", prompt: "p", payload: {} }),
     (error: unknown) => error instanceof BridgeError && error.code === "AUTHORITY_STALE",
   );
   assert.deepEqual(appended, []);

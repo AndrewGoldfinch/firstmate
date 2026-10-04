@@ -104,7 +104,7 @@ Note: a turn that calls a tool must set `{ stopReason: "toolUse" }`. With the de
 The P1A service, protocol, and single-owner store lock live in `runtime/pi-durable/`.
 It is a Node package with pinned dependencies and no compile step, because Node 22.21.1 runs the TypeScript directly through type stripping.
 The service opens the upstream Durable SQLite conversation store through `provider.ts`, keeps its own acceptance and identity store, and binds a private Unix-domain socket per canonical `FM_HOME`.
-It is opt-in and is not wired into the existing Pi supervision path; the provider seam belongs to P1C.
+It is opt-in: the existing Pi supervision path stays the default, and `config/supervision-execution` selects the durable sidecar at the branch execution seam.
 
 P1B adds the durable supervisor binding: conversation identity, a pinned configuration digest over model, thinking level, instructions, cwd, and capability profile, and the current FirstMate authority generation, wake claim, and row set.
 `ensureSupervisor` creates or reattaches a dedicated conversation with an explicit narrow agent grant (`extensions` and `tools` empty) instead of adopting the reserved root conversation, so an unrelated root configuration cannot widen it.
@@ -115,6 +115,7 @@ P1C adds the dispatch and outcome bridge: `dispatch` executes one accepted super
 `src/bridge.ts` validates the candidate result, routes it through the existing outcome store (`bin/fm-branch-outcome.sh`), and returns a recorded receipt on a settled repeat instead of appending a conflicting outcome.
 `src/selection.ts` reads `config/supervision-execution`; absent or empty selects the existing path, and an unknown value is refused.
 `src/bridge-cli.ts` is the subprocess entry point the Pi extension can spawn across the package boundary.
+The Pi extension reads the same config value once per session (`.pi/extensions/lib/fm-execution-provider.ts`) and, when it selects `pi-durable`, runs the bridge CLI in place of the in-process branch prompt; the default `existing` path is byte-identical.
 
 ```sh
 cd runtime/pi-durable
@@ -127,3 +128,4 @@ Result on 2026-10-04: `npm run typecheck` exits 0, and `npm test` reports 47 tes
 The suite covers the P1A acceptance gate: two owner processes cannot open one store (in-process and cross-process), a wrong home or an incompatible protocol is refused, a repeated operation ID returns the original acceptance without a new execution, a changed payload or configuration under the same ID is refused, no secret reaches the store file, diagnostics, or a reply, and the message-size and outstanding-operation bounds hold.
 It also covers the P1B gate: restart returns to the original operation and conversation, stale work cannot execute a guarded mutation, and a fresh conversation is pinned to the narrow capability profile and cannot inherit an unrelated root configuration.
 It also covers the P1C bridge: a malformed candidate result is refused before any outcome is appended, a settled repeat with a receipt appends nothing, a sidecar refusal surfaces as a diagnosable bridge error, the provider selection defaults to the existing path, and an end-to-end dispatch through a real sidecar and the real outcome store appends exactly one outcome.
+The pinned Pi extension tests pass with the seam in place, including a `pi-durable` selection that routes one wake through the bridge into the existing outcome sink without running the in-process branch prompt.

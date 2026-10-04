@@ -23,7 +23,6 @@ type CliInput = {
   wakeClaimId: string;
   rowIds: string[];
   operationId: string;
-  task: string;
   prompt: string;
   payload: JsonValue;
   outcomeScript: string;
@@ -43,7 +42,7 @@ async function main(): Promise<void> {
   const sink = createOutcomeSink({ scriptPath: input.outcomeScript });
   const result = await runDurableDispatch(
     { transport, sink },
-    { operationId: input.operationId, task: input.task, prompt: input.prompt, payload: input.payload },
+    { operationId: input.operationId, prompt: input.prompt, payload: input.payload },
   );
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }

@@ -14,6 +14,7 @@ export type CandidateVerdict = "routine" | "captain";
 
 /** The schema-validated candidate supervision result. */
 export type CandidateResult = {
+  task: string;
   verdict: CandidateVerdict;
   summary: string;
   wake?: string;
@@ -40,9 +41,13 @@ export function parseCandidateResult(raw: unknown): CandidateResult {
     malformed("candidate result must be a JSON object");
   }
   const source = raw as Record<string, unknown>;
-  const allowed = new Set(["verdict", "summary", "wake", "silent"]);
+  const allowed = new Set(["task", "verdict", "summary", "wake", "silent"]);
   for (const key of Object.keys(source)) {
     if (!allowed.has(key)) malformed(`candidate result has an unknown field ${JSON.stringify(key)}`);
+  }
+  const task = source.task;
+  if (typeof task !== "string" || task.trim().length === 0) {
+    malformed("candidate result task must be a non-empty string");
   }
   const verdict = source.verdict;
   if (verdict !== "routine" && verdict !== "captain") {
@@ -61,6 +66,7 @@ export function parseCandidateResult(raw: unknown): CandidateResult {
     malformed("candidate result silent must be a boolean when present");
   }
   return {
+    task,
     verdict,
     summary,
     ...(wake !== undefined ? { wake } : {}),
@@ -70,7 +76,7 @@ export function parseCandidateResult(raw: unknown): CandidateResult {
 
 /** The existing outcome sink, owner: `bin/fm-branch-outcome.sh`. */
 export type OutcomeSink = {
-  append(result: CandidateResult, task: string): Promise<number>;
+  append(result: CandidateResult): Promise<number>;
 };
 
 export type DispatchOutcome =
@@ -89,7 +95,6 @@ export type DispatchTransport = {
 
 export type DurableDispatchInput = {
   operationId: string;
-  task: string;
   prompt: string;
   payload: JsonValue;
 };
@@ -122,7 +127,7 @@ export async function runDurableDispatch(
     return { seq: dispatched.receipt.seq, replayed: true };
   }
   const candidate = parseCandidateResult(dispatched.result);
-  const seq = await deps.sink.append(candidate, input.task);
+  const seq = await deps.sink.append(candidate);
   await deps.transport.recordReceipt(input.operationId, seq);
   return { seq, replayed: false };
 }

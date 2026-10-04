@@ -56,7 +56,7 @@ test("a durable dispatch appends one outcome and a settled repeat appends none",
   );
   assert.equal((ensured as { ok: boolean }).ok, true);
 
-  faux.setResponses([fauxAssistantMessage('{"verdict":"routine","summary":"all clear"}')]);
+  faux.setResponses([fauxAssistantMessage('{"task":"task-1","verdict":"routine","summary":"all clear"}')]);
   const transport = new SidecarClient({
     socketPath: sidecar.socketPath,
     homeId: sidecar.homeId,
@@ -72,7 +72,6 @@ test("a durable dispatch appends one outcome and a settled repeat appends none",
   });
   const dispatchInput = {
     operationId: "fm:home:supervision:claim-3:3",
-    task: "task-1",
     prompt: "supervise",
     payload: { rows: ["row-1"], generation: 3 },
   };
