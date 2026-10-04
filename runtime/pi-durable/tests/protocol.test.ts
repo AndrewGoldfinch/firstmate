@@ -38,7 +38,7 @@ test("parseRequest accepts a well-formed health request", () => {
 
 test("parseRequest refuses unknown operations", () => {
   assert.throws(
-    () => parseRequest({ protocolVersion: PROTOCOL_VERSION, homeId: "/h", op: "observe" }),
+    () => parseRequest({ protocolVersion: PROTOCOL_VERSION, homeId: "/h", op: "teleport" }),
     (error: unknown) => error instanceof ProtocolError && error.code === "UNSUPPORTED_OPERATION",
   );
 });

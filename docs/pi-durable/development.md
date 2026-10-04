@@ -99,7 +99,7 @@ faux.setResponses([fauxAssistantMessage([fauxToolCall("my_tool", {})], { stopRea
 
 Note: a turn that calls a tool must set `{ stopReason: "toolUse" }`. With the default `"stop"`, the harness treats the message as the final answer and never runs the tool (observed directly).
 
-## P1A, P1B, and P1C sidecar (`runtime/pi-durable`)
+## P1A through P1D sidecar (`runtime/pi-durable`)
 
 The P1A service, protocol, and single-owner store lock live in `runtime/pi-durable/`.
 It is a Node package with pinned dependencies and no compile step, because Node 22.21.1 runs the TypeScript directly through type stripping.
@@ -117,6 +117,10 @@ P1C adds the dispatch and outcome bridge: `dispatch` executes one accepted super
 `src/bridge-cli.ts` is the subprocess entry point the Pi extension can spawn across the package boundary.
 The Pi extension reads the same config value once per session (`.pi/extensions/lib/fm-execution-provider.ts`) and, when it selects `pi-durable`, runs the bridge CLI in place of the in-process branch prompt; the default `existing` path is byte-identical.
 
+P1D adds bounded observation: a durable adapter outbox with `accepted`, `settlement`, and `unresolved` observations, exposed through `observe` (a cursor page) and `observeAck` (a monotonic cursor).
+The queue is bounded per home and pruning drops transient observations before settlements; a cursor behind the retained window is refused as a gap; and the cursor cannot advance past a settlement whose delivery receipt is not committed.
+A snapshot (`inspect`) or an accepted-but-unsettled operation is never a settlement observation.
+
 ```sh
 cd runtime/pi-durable
 npm ci                 # uses the committed package-lock.json; npm install also works
@@ -124,8 +128,9 @@ npm run typecheck      # tsc --noEmit -p tsconfig.json
 npm test               # node --test tests/*.test.ts
 ```
 
-Result on 2026-10-04: `npm run typecheck` exits 0, and `npm test` reports 47 tests, 47 pass, 0 fail.
+Result on 2026-10-04: `npm run typecheck` exits 0, and `npm test` reports 53 tests, 53 pass, 0 fail.
 The suite covers the P1A acceptance gate: two owner processes cannot open one store (in-process and cross-process), a wrong home or an incompatible protocol is refused, a repeated operation ID returns the original acceptance without a new execution, a changed payload or configuration under the same ID is refused, no secret reaches the store file, diagnostics, or a reply, and the message-size and outstanding-operation bounds hold.
 It also covers the P1B gate: restart returns to the original operation and conversation, stale work cannot execute a guarded mutation, and a fresh conversation is pinned to the narrow capability profile and cannot inherit an unrelated root configuration.
 It also covers the P1C bridge: a malformed candidate result is refused before any outcome is appended, a settled repeat with a receipt appends nothing, a sidecar refusal surfaces as a diagnosable bridge error, the provider selection defaults to the existing path, and an end-to-end dispatch through a real sidecar and the real outcome store appends exactly one outcome.
 The pinned Pi extension tests pass with the seam in place, including a `pi-durable` selection that routes one wake through the bridge into the existing outcome sink without running the in-process branch prompt.
+It also covers the P1D gate: a subscriber reconnects after missed observations and recovers every undelivered settlement, a snapshot or an accepted-but-unsettled operation is never a settlement, a duplicate settled result produces one observation, and the cursor refuses to advance past a settlement without its receipt.

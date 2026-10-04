@@ -64,3 +64,20 @@ test("a P1A supervisors table is migrated in place", () => {
   assert.deepEqual(updated?.rowIds, ["row-1"]);
   store.close();
 });
+
+test("observation pruning drops transient observations before settlements", () => {
+  const store = new OperationStore(join(tempHome(), "operations.sqlite"));
+  store.appendObservation({ homeId: "/h", kind: "accepted", operationId: "a", payload: {}, at: 1 });
+  store.appendObservation({ homeId: "/h", kind: "accepted", operationId: "b", payload: {}, at: 1 });
+  store.appendObservation({ homeId: "/h", kind: "settlement", operationId: "a", payload: {}, at: 1 });
+  store.appendObservation({ homeId: "/h", kind: "accepted", operationId: "c", payload: {}, at: 1 });
+  store.appendObservation({ homeId: "/h", kind: "settlement", operationId: "b", payload: {}, at: 1 });
+  store.pruneObservations("/h", 3);
+  const remaining = store.listObservations("/h", 0, 100);
+  assert.equal(remaining.length, 3);
+  assert.deepEqual(
+    remaining.map((observation) => `${observation.kind}:${observation.operationId}`),
+    ["settlement:a", "accepted:c", "settlement:b"],
+  );
+  store.close();
+});

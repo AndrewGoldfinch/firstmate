@@ -22,6 +22,8 @@ import { DurableProvider, dependencyVersions, type ModelConfigurer } from "./pro
 import {
   DEFAULT_MAX_MESSAGE_BYTES,
   DEFAULT_MAX_OUTSTANDING,
+  DEFAULT_OBSERVE_LIMIT,
+  MAX_OBSERVATIONS,
   PROTOCOL_VERSION,
   ProtocolError,
   digestOf,
@@ -33,6 +35,9 @@ import {
   type DispatchRequest,
   type EnsureSupervisorRequest,
   type HealthResult,
+  type JsonValue,
+  type ObserveAckRequest,
+  type ObserveRequest,
   type OperationRecord,
   type ReceiptRequest,
   type ResumeRequest,
@@ -268,6 +273,10 @@ export class DurableSidecar {
         return this.dispatchOperation(request);
       case "receipt":
         return this.receipt(request);
+      case "observe":
+        return this.observe(request);
+      case "observeAck":
+        return this.observeAck(request);
       case "resume":
         return this.resume(request);
       case "shutdown": {
@@ -448,13 +457,87 @@ export class DurableSidecar {
       updatedAt: at,
     };
     this.store.insertOperation(record);
-    const result = await this.provider.runSupervision({
-      conversationId: binding.conversationId,
-      prompt: request.prompt,
-    });
+    this.recordObservation("accepted", request.operationId, { state: "accepted" });
+    let result: JsonValue;
+    try {
+      result = await this.provider.runSupervision({
+        conversationId: binding.conversationId,
+        prompt: request.prompt,
+      });
+    } catch (error) {
+      // Accepted but unresolved: the effect may have happened, so it must be
+      // reconciled rather than blindly retried.
+      const message = error instanceof Error ? error.message : String(error);
+      this.recordObservation("unresolved", request.operationId, { state: "accepted", error: message });
+      throw error;
+    }
     this.store.settleOperation(request.operationId, result, this.now());
+    this.recordObservation("settlement", request.operationId, result);
     const settled = this.store.getOperation(request.operationId) ?? record;
     return { record: settled, result, replayed: false };
+  }
+
+  /** Append one durable outbox observation and bound the queue. */
+  private recordObservation(kind: string, operationId: string | null, payload: JsonValue): void {
+    this.store.appendObservation({
+      homeId: this.homeId,
+      kind,
+      operationId,
+      payload,
+      at: this.now(),
+    });
+    this.store.pruneObservations(this.homeId, MAX_OBSERVATIONS);
+  }
+
+  /**
+   * Read normalized observations after a cursor. A cursor behind the retained
+   * window is refused as a gap rather than silently skipping settlements.
+   */
+  private observe(request: ObserveRequest) {
+    const after = request.after ?? this.store.getObserveCursor(this.homeId);
+    const oldestSeq = this.store.oldestObservationSeq(this.homeId);
+    if (oldestSeq !== null && after < oldestSeq - 1) {
+      throw new ProtocolError(
+        "OBSERVE_GAP",
+        `cursor ${after} is behind the retained observation window starting at ${oldestSeq}`,
+      );
+    }
+    const limit = request.limit ?? DEFAULT_OBSERVE_LIMIT;
+    const page = this.store.listObservations(this.homeId, after, limit + 1);
+    const hasMore = page.length > limit;
+    const observations = hasMore ? page.slice(0, limit) : page;
+    const cursor = observations.length > 0 ? observations[observations.length - 1]!.seq : after;
+    return { observations, cursor, hasMore, oldestSeq };
+  }
+
+  /**
+   * Advance the observe cursor. A settlement observation cannot be acknowledged
+   * before its delivery receipt is committed, and the cursor never moves back.
+   */
+  private observeAck(request: ObserveAckRequest) {
+    const current = this.store.getObserveCursor(this.homeId);
+    if (request.cursor < current) {
+      throw new ProtocolError(
+        "CURSOR_INVALID",
+        `cursor ${request.cursor} is behind the committed cursor ${current}`,
+      );
+    }
+    for (const settlement of this.store.settlementObservationsBetween(
+      this.homeId,
+      current,
+      request.cursor,
+    )) {
+      if (!settlement.operationId) continue;
+      const record = this.store.getOperation(settlement.operationId);
+      if (!record || record.receipt === null) {
+        throw new ProtocolError(
+          "RECEIPT_REQUIRED",
+          `settlement ${settlement.seq} has no committed delivery receipt`,
+        );
+      }
+    }
+    this.store.setObserveCursor(this.homeId, request.cursor, this.now());
+    return { cursor: request.cursor };
   }
 
   /** Record the mirrored outcome receipt for an operation. Idempotent. */

@@ -13,7 +13,7 @@
  */
 
 import { DatabaseSync } from "node:sqlite";
-import type { JsonValue, OperationRecord, SupervisorBinding } from "./protocol.ts";
+import type { JsonValue, Observation, OperationRecord, SupervisorBinding } from "./protocol.ts";
 
 type OperationRow = {
   operation_id: string;
@@ -44,6 +44,25 @@ type SupervisorRow = {
   created_at: number;
   updated_at: number;
 };
+
+type ObservationRow = {
+  seq: number;
+  home_id: string;
+  kind: string;
+  operation_id: string | null;
+  payload_json: string;
+  created_at: number;
+};
+
+function toObservation(row: ObservationRow): Observation {
+  return {
+    seq: row.seq,
+    kind: row.kind,
+    operationId: row.operation_id,
+    payload: JSON.parse(row.payload_json) as JsonValue,
+    createdAt: row.created_at,
+  };
+}
 
 function toRecord(row: OperationRow): OperationRecord {
   return {
@@ -117,6 +136,20 @@ export class OperationStore {
         created_at INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (home_id, supervisor_id)
+      );
+      CREATE TABLE IF NOT EXISTS observations (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        home_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        operation_id TEXT,
+        payload_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS observations_home_seq ON observations (home_id, seq);
+      CREATE TABLE IF NOT EXISTS observe_cursor (
+        home_id TEXT PRIMARY KEY,
+        cursor INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL DEFAULT 0
       );
     `);
     this.migrateSupervisors();
@@ -208,6 +241,113 @@ export class OperationStore {
     this.db
       .prepare("UPDATE operations SET receipt_json = ?, updated_at = ? WHERE operation_id = ?")
       .run(JSON.stringify({ seq }), at, operationId);
+  }
+
+  /** Append one durable outbox observation and return its sequence. */
+  appendObservation(observation: {
+    homeId: string;
+    kind: string;
+    operationId: string | null;
+    payload: JsonValue;
+    at: number;
+  }): number {
+    const result = this.db
+      .prepare(
+        "INSERT INTO observations (home_id, kind, operation_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(
+        observation.homeId,
+        observation.kind,
+        observation.operationId,
+        JSON.stringify(observation.payload),
+        observation.at,
+      );
+    return Number(result.lastInsertRowid);
+  }
+
+  listObservations(homeId: string, after: number, limit: number): Observation[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM observations WHERE home_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?",
+      )
+      .all(homeId, after, limit) as ObservationRow[];
+    return rows.map(toObservation);
+  }
+
+  countObservations(homeId: string): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS n FROM observations WHERE home_id = ?")
+      .get(homeId) as { n: number };
+    return row.n;
+  }
+
+  /** Settlement observations in (after, through], oldest first. */
+  settlementObservationsBetween(
+    homeId: string,
+    after: number,
+    through: number,
+  ): { seq: number; operationId: string | null }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT seq, operation_id FROM observations
+         WHERE home_id = ? AND kind = 'settlement' AND seq > ? AND seq <= ?
+         ORDER BY seq ASC`,
+      )
+      .all(homeId, after, through) as { seq: number; operation_id: string | null }[];
+    return rows.map((row) => ({ seq: row.seq, operationId: row.operation_id }));
+  }
+
+  /** Oldest observation sequence still retained for a home, or null when empty. */
+  oldestObservationSeq(homeId: string): number | null {
+    const row = this.db
+      .prepare("SELECT MIN(seq) AS seq FROM observations WHERE home_id = ?")
+      .get(homeId) as { seq: number | null };
+    return row.seq ?? null;
+  }
+
+  /**
+   * Bound the outbox: drop oldest transient observations first, then oldest
+   * settlement observations only when the transient pool cannot cover the
+   * excess. Settlement observations are the durable ones a subscriber needs.
+   */
+  pruneObservations(homeId: string, max: number): void {
+    let excess = this.countObservations(homeId) - max;
+    if (excess <= 0) return;
+    const transient = this.db
+      .prepare(
+        `DELETE FROM observations WHERE seq IN (
+           SELECT seq FROM observations WHERE home_id = ? AND kind != 'settlement'
+           ORDER BY seq ASC LIMIT ?
+         )`,
+      )
+      .run(homeId, excess);
+    excess -= Number(transient.changes);
+    if (excess > 0) {
+      this.db
+        .prepare(
+          `DELETE FROM observations WHERE seq IN (
+             SELECT seq FROM observations WHERE home_id = ? ORDER BY seq ASC LIMIT ?
+           )`,
+        )
+        .run(homeId, excess);
+    }
+  }
+
+  getObserveCursor(homeId: string): number {
+    const row = this.db
+      .prepare("SELECT cursor FROM observe_cursor WHERE home_id = ?")
+      .get(homeId) as { cursor: number } | undefined;
+    return row ? row.cursor : 0;
+  }
+
+  /** Advance the observe cursor; never moves backwards. */
+  setObserveCursor(homeId: string, cursor: number, at: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO observe_cursor (home_id, cursor, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(home_id) DO UPDATE SET cursor = MAX(cursor, excluded.cursor), updated_at = excluded.updated_at`,
+      )
+      .run(homeId, cursor, at);
   }
 
   getSupervisorBinding(homeId: string, supervisorId: string): SupervisorBinding | null {

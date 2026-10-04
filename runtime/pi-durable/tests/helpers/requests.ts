@@ -88,3 +88,17 @@ export function dispatchRequest(
 export function receiptRequest(homeId: string, operationId: string, seq: number) {
   return { protocolVersion: PROTOCOL_VERSION, homeId, op: "receipt", operationId, seq };
 }
+
+export function observeRequest(homeId: string, after?: number, limit?: number) {
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    homeId,
+    op: "observe",
+    ...(after !== undefined ? { after } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+  };
+}
+
+export function observeAckRequest(homeId: string, cursor: number) {
+  return { protocolVersion: PROTOCOL_VERSION, homeId, op: "observeAck", cursor };
+}

@@ -29,6 +29,13 @@ export const MAX_ID_CHARS = 256;
 /** Cap on the accepted row-id list length. */
 export const MAX_ROW_IDS = 4096;
 
+/** Bounded observe queue size per home. */
+export const MAX_OBSERVATIONS = 1000;
+
+/** Observe page size bounds. */
+export const DEFAULT_OBSERVE_LIMIT = 64;
+export const MAX_OBSERVE_LIMIT = 256;
+
 export type JsonValue =
   | null
   | boolean
@@ -44,6 +51,8 @@ export type OperationName =
   | "inspect"
   | "dispatch"
   | "receipt"
+  | "observe"
+  | "observeAck"
   | "resume"
   | "shutdown";
 
@@ -54,6 +63,8 @@ export const OPERATION_NAMES: readonly OperationName[] = [
   "inspect",
   "dispatch",
   "receipt",
+  "observe",
+  "observeAck",
   "resume",
   "shutdown",
 ];
@@ -100,6 +111,9 @@ export type ErrorCode =
   | "CWD_INVALID"
   | "CONFIG_CONFLICT"
   | "RECONCILE_REQUIRED"
+  | "OBSERVE_GAP"
+  | "RECEIPT_REQUIRED"
+  | "CURSOR_INVALID"
   | "AUTHORITY_UNKNOWN"
   | "AUTHORITY_STALE"
   | "AUTHORITY_CONFLICT"
@@ -184,6 +198,28 @@ export type ReceiptRequest = BaseRequest & {
   seq: number;
 };
 
+export type ObservationKind = "accepted" | "settlement" | "unresolved";
+
+/** One normalized, durable outbox observation. */
+export type Observation = {
+  seq: number;
+  kind: string;
+  operationId: string | null;
+  payload: JsonValue;
+  createdAt: number;
+};
+
+export type ObserveRequest = BaseRequest & {
+  op: "observe";
+  after?: number;
+  limit?: number;
+};
+
+export type ObserveAckRequest = BaseRequest & {
+  op: "observeAck";
+  cursor: number;
+};
+
 export type ResumeRequest = BaseRequest &
   AuthorityBinding & {
     op: "resume";
@@ -200,6 +236,8 @@ export type SidecarRequest =
   | InspectRequest
   | DispatchRequest
   | ReceiptRequest
+  | ObserveRequest
+  | ObserveAckRequest
   | ResumeRequest
   | ShutdownRequest;
 
@@ -269,6 +307,15 @@ export type DispatchResult = {
 
 export type ReceiptResult = { recorded: true };
 
+export type ObserveResult = {
+  observations: Observation[];
+  cursor: number;
+  hasMore: boolean;
+  oldestSeq: number | null;
+};
+
+export type ObserveAckResult = { cursor: number };
+
 export type ResumeResult = { resumed: true; generation: number };
 
 export type SidecarResult =
@@ -278,6 +325,8 @@ export type SidecarResult =
   | InspectResult
   | DispatchResult
   | ReceiptResult
+  | ObserveResult
+  | ObserveAckResult
   | ResumeResult
   | { stopped: true };
 
@@ -469,6 +518,24 @@ export function parseRequest(raw: unknown): SidecarRequest {
         operationId: asString(source, "operationId"),
         seq: parseGeneration(source, "seq"),
       };
+    case "observe": {
+      const after = source.after === undefined ? undefined : parseGeneration(source, "after");
+      let limit: number | undefined;
+      if (source.limit !== undefined) {
+        limit = parseGeneration(source, "limit");
+        if (limit === 0 || limit > MAX_OBSERVE_LIMIT) {
+          fail("BAD_REQUEST", `limit must be between 1 and ${MAX_OBSERVE_LIMIT}`);
+        }
+      }
+      return {
+        ...base,
+        op: "observe",
+        ...(after !== undefined ? { after } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      };
+    }
+    case "observeAck":
+      return { ...base, op: "observeAck", cursor: parseGeneration(source, "cursor") };
     case "resume":
       return {
         ...base,
