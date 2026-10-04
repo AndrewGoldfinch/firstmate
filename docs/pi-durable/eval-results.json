@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-04T17:20:49.806Z",
+  "generatedAt": "2026-10-04T17:25:42.920Z",
   "environment": "Node v22.21.1; local Linux host; deterministic faux model for both arms; disposable-container restart lane for the process-crash and reboot boundaries; bounded real-model pilot when a provider credential is reachable",
   "arms": {
     "existing": {
@@ -11,7 +11,7 @@
         "outcomes": [
           {
             "seq": 1,
-            "epoch": 1791134407,
+            "epoch": 1791134704,
             "task": "T1",
             "wake": "",
             "verdict": "routine",
@@ -22,7 +22,7 @@
           },
           {
             "seq": 2,
-            "epoch": 1791134408,
+            "epoch": 1791134704,
             "task": "T2",
             "wake": "",
             "verdict": "routine",
@@ -33,7 +33,7 @@
           },
           {
             "seq": 3,
-            "epoch": 1791134408,
+            "epoch": 1791134705,
             "task": "T3",
             "wake": "",
             "verdict": "routine",
@@ -44,7 +44,7 @@
           },
           {
             "seq": 4,
-            "epoch": 1791134408,
+            "epoch": 1791134705,
             "task": "T4",
             "wake": "",
             "verdict": "captain",
@@ -55,7 +55,7 @@
           },
           {
             "seq": 5,
-            "epoch": 1791134408,
+            "epoch": 1791134705,
             "task": "T5",
             "wake": "",
             "verdict": "routine",
@@ -66,7 +66,7 @@
           },
           {
             "seq": 6,
-            "epoch": 1791134408,
+            "epoch": 1791134705,
             "task": "T6",
             "wake": "",
             "verdict": "routine",
@@ -119,37 +119,37 @@
             "effect": "outcome:T1",
             "operationId": "T1",
             "owner": "branch",
-            "at": 1791134408002
+            "at": 1791134704930
           },
           {
             "effect": "outcome:T2",
             "operationId": "T2",
             "owner": "branch",
-            "at": 1791134408058
+            "at": 1791134704990
           },
           {
             "effect": "outcome:T3",
             "operationId": "T3",
             "owner": "branch",
-            "at": 1791134408113
+            "at": 1791134705050
           },
           {
             "effect": "outcome:T4",
             "operationId": "T4",
             "owner": "branch",
-            "at": 1791134408167
+            "at": 1791134705109
           },
           {
             "effect": "outcome:T5",
             "operationId": "T5",
             "owner": "branch",
-            "at": 1791134408222
+            "at": 1791134705169
           },
           {
             "effect": "outcome:T6",
             "operationId": "T6",
             "owner": "branch",
-            "at": 1791134408275
+            "at": 1791134705229
           }
         ],
         "acknowledgements": [],
@@ -182,7 +182,7 @@
         "outcomes": [
           {
             "seq": 1,
-            "epoch": 1791134408,
+            "epoch": 1791134705,
             "task": "T1",
             "wake": "",
             "verdict": "routine",
@@ -193,7 +193,7 @@
           },
           {
             "seq": 2,
-            "epoch": 1791134408,
+            "epoch": 1791134705,
             "task": "T2",
             "wake": "",
             "verdict": "routine",
@@ -204,7 +204,7 @@
           },
           {
             "seq": 3,
-            "epoch": 1791134408,
+            "epoch": 1791134705,
             "task": "T3",
             "wake": "",
             "verdict": "routine",
@@ -215,7 +215,7 @@
           },
           {
             "seq": 4,
-            "epoch": 1791134408,
+            "epoch": 1791134705,
             "task": "T4",
             "wake": "",
             "verdict": "captain",
@@ -226,7 +226,7 @@
           },
           {
             "seq": 5,
-            "epoch": 1791134408,
+            "epoch": 1791134705,
             "task": "T5",
             "wake": "",
             "verdict": "routine",
@@ -237,7 +237,7 @@
           },
           {
             "seq": 6,
-            "epoch": 1791134408,
+            "epoch": 1791134705,
             "task": "T6",
             "wake": "",
             "verdict": "routine",
@@ -249,37 +249,37 @@
         ],
         "operations": [
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-JNdWas/arm-durable:supervision:T1:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-bZgI5A/arm-durable:supervision:T1:1",
             "task": "T1",
             "state": "settled",
             "receiptSeq": 1
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-JNdWas/arm-durable:supervision:T2:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-bZgI5A/arm-durable:supervision:T2:1",
             "task": "T2",
             "state": "settled",
             "receiptSeq": 2
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-JNdWas/arm-durable:supervision:T3:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-bZgI5A/arm-durable:supervision:T3:1",
             "task": "T3",
             "state": "settled",
             "receiptSeq": 3
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-JNdWas/arm-durable:supervision:T4:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-bZgI5A/arm-durable:supervision:T4:1",
             "task": "T4",
             "state": "settled",
             "receiptSeq": 4
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-JNdWas/arm-durable:supervision:T5:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-bZgI5A/arm-durable:supervision:T5:1",
             "task": "T5",
             "state": "settled",
             "receiptSeq": 5
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-JNdWas/arm-durable:supervision:T6:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-bZgI5A/arm-durable:supervision:T6:1",
             "task": "T6",
             "state": "settled",
             "receiptSeq": 6
@@ -290,37 +290,37 @@
             "effect": "outcome:T1",
             "operationId": "T1",
             "owner": "branch",
-            "at": 1791134408383
+            "at": 1791134705352
           },
           {
             "effect": "outcome:T2",
             "operationId": "T2",
             "owner": "branch",
-            "at": 1791134408441
+            "at": 1791134705420
           },
           {
             "effect": "outcome:T3",
             "operationId": "T3",
             "owner": "branch",
-            "at": 1791134408501
+            "at": 1791134705485
           },
           {
             "effect": "outcome:T4",
             "operationId": "T4",
             "owner": "branch",
-            "at": 1791134408560
+            "at": 1791134705552
           },
           {
             "effect": "outcome:T5",
             "operationId": "T5",
             "owner": "branch",
-            "at": 1791134408620
+            "at": 1791134705619
           },
           {
             "effect": "outcome:T6",
             "operationId": "T6",
             "owner": "branch",
-            "at": 1791134408679
+            "at": 1791134705685
           }
         ],
         "acknowledgements": [],
@@ -350,7 +350,7 @@
         "outcomes": [
           {
             "seq": 1,
-            "epoch": 1791134408,
+            "epoch": 1791134705,
             "task": "T1",
             "wake": "",
             "verdict": "routine",
@@ -361,7 +361,7 @@
           },
           {
             "seq": 2,
-            "epoch": 1791134408,
+            "epoch": 1791134705,
             "task": "T2",
             "wake": "",
             "verdict": "routine",
@@ -372,7 +372,7 @@
           },
           {
             "seq": 3,
-            "epoch": 1791134408,
+            "epoch": 1791134705,
             "task": "T4",
             "wake": "",
             "verdict": "captain",
@@ -383,7 +383,7 @@
           },
           {
             "seq": 4,
-            "epoch": 1791134408,
+            "epoch": 1791134705,
             "task": "T5",
             "wake": "",
             "verdict": "routine",
@@ -394,7 +394,7 @@
           },
           {
             "seq": 5,
-            "epoch": 1791134408,
+            "epoch": 1791134706,
             "task": "T6",
             "wake": "",
             "verdict": "routine",
@@ -447,31 +447,31 @@
             "effect": "outcome:T1",
             "operationId": "T1",
             "owner": "branch",
-            "at": 1791134408770
+            "at": 1791134705785
           },
           {
             "effect": "outcome:T2",
             "operationId": "T2",
             "owner": "branch",
-            "at": 1791134408824
+            "at": 1791134705845
           },
           {
             "effect": "outcome:T4",
             "operationId": "T4",
             "owner": "branch",
-            "at": 1791134408877
+            "at": 1791134705906
           },
           {
             "effect": "outcome:T5",
             "operationId": "T5",
             "owner": "branch",
-            "at": 1791134408932
+            "at": 1791134705967
           },
           {
             "effect": "outcome:T6",
             "operationId": "T6",
             "owner": "branch",
-            "at": 1791134408986
+            "at": 1791134706029
           }
         ],
         "acknowledgements": [],
@@ -506,7 +506,7 @@
         "outcomes": [
           {
             "seq": 1,
-            "epoch": 1791134409,
+            "epoch": 1791134706,
             "task": "T2",
             "wake": "",
             "verdict": "routine",
@@ -517,7 +517,7 @@
           },
           {
             "seq": 2,
-            "epoch": 1791134409,
+            "epoch": 1791134706,
             "task": "T3",
             "wake": "",
             "verdict": "routine",
@@ -528,7 +528,7 @@
           },
           {
             "seq": 3,
-            "epoch": 1791134409,
+            "epoch": 1791134706,
             "task": "T4",
             "wake": "",
             "verdict": "captain",
@@ -539,7 +539,7 @@
           },
           {
             "seq": 4,
-            "epoch": 1791134409,
+            "epoch": 1791134706,
             "task": "T5",
             "wake": "",
             "verdict": "routine",
@@ -550,7 +550,7 @@
           },
           {
             "seq": 5,
-            "epoch": 1791134409,
+            "epoch": 1791134706,
             "task": "T6",
             "wake": "",
             "verdict": "routine",
@@ -562,37 +562,37 @@
         ],
         "operations": [
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-JNdWas/arm-durable-fault:supervision:T1:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-bZgI5A/arm-durable-fault:supervision:T1:1",
             "task": "T1",
             "state": "accepted",
             "receiptSeq": null
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-JNdWas/arm-durable-fault:supervision:T2:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-bZgI5A/arm-durable-fault:supervision:T2:1",
             "task": "T2",
             "state": "settled",
             "receiptSeq": 1
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-JNdWas/arm-durable-fault:supervision:T3:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-bZgI5A/arm-durable-fault:supervision:T3:1",
             "task": "T3",
             "state": "settled",
             "receiptSeq": 2
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-JNdWas/arm-durable-fault:supervision:T4:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-bZgI5A/arm-durable-fault:supervision:T4:1",
             "task": "T4",
             "state": "settled",
             "receiptSeq": 3
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-JNdWas/arm-durable-fault:supervision:T5:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-bZgI5A/arm-durable-fault:supervision:T5:1",
             "task": "T5",
             "state": "settled",
             "receiptSeq": 4
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-JNdWas/arm-durable-fault:supervision:T6:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-bZgI5A/arm-durable-fault:supervision:T6:1",
             "task": "T6",
             "state": "settled",
             "receiptSeq": 5
@@ -603,31 +603,31 @@
             "effect": "outcome:T2",
             "operationId": "T2",
             "owner": "branch",
-            "at": 1791134409092
+            "at": 1791134706143
           },
           {
             "effect": "outcome:T3",
             "operationId": "T3",
             "owner": "branch",
-            "at": 1791134409151
+            "at": 1791134706208
           },
           {
             "effect": "outcome:T4",
             "operationId": "T4",
             "owner": "branch",
-            "at": 1791134409209
+            "at": 1791134706273
           },
           {
             "effect": "outcome:T5",
             "operationId": "T5",
             "owner": "branch",
-            "at": 1791134409266
+            "at": 1791134706342
           },
           {
             "effect": "outcome:T6",
             "operationId": "T6",
             "owner": "branch",
-            "at": 1791134409325
+            "at": 1791134706411
           }
         ],
         "acknowledgements": [],
@@ -930,7 +930,7 @@
       "id": "F11",
       "title": "service crash with valid generation",
       "status": "pass",
-      "detail": "image=fm-pi-durable-lane:local docker=29.8.2 {\"generation\":1,\"killed\":true,\"nodeInContainer\":\"v22.23.3\",\"pid\":207902}"
+      "detail": "image=fm-pi-durable-lane:local docker=29.8.2 {\"generation\":1,\"killed\":true,\"nodeInContainer\":\"v22.23.3\",\"pid\":325742}"
     },
     {
       "id": "F12",
@@ -990,7 +990,7 @@
         "generation": 1,
         "killed": true,
         "nodeInContainer": "v22.23.3",
-        "pid": 207902
+        "pid": 325742
       }
     },
     "f17": {
@@ -1022,48 +1022,48 @@
       {
         "task": "T1",
         "verdict": "routine",
-        "summary": "disposition=ready_for_review; tests pass, awaiting review",
-        "text": "{\"task\":\"T1\",\"verdict\":\"routine\",\"summary\":\"disposition=ready_for_review; tests pass, awaiting review\"}",
-        "latencyMs": 3244
+        "summary": "disposition=ready_for_review; worker finished tests pass review pending",
+        "text": "{\"task\":\"T1\",\"verdict\":\"routine\",\"summary\":\"disposition=ready_for_review; worker finished tests pass review pending\"}",
+        "latencyMs": 1170
       },
       {
         "task": "T2",
         "verdict": "routine",
-        "summary": "disposition=surface_failure; CI failing contradicts completion claim",
-        "text": "{\"task\":\"T2\",\"verdict\":\"routine\",\"summary\":\"disposition=surface_failure; CI failing contradicts completion claim\"}",
-        "latencyMs": 2077
+        "summary": "disposition=surface_failure; worker claims done but CI failing",
+        "text": "{\"task\":\"T2\",\"verdict\":\"routine\",\"summary\":\"disposition=surface_failure; worker claims done but CI failing\"}",
+        "latencyMs": 3084
       },
       {
         "task": "T3",
         "verdict": "routine",
-        "summary": "disposition=working; heartbeats show progress despite no text output",
-        "text": "{\"task\":\"T3\",\"verdict\":\"routine\",\"summary\":\"disposition=working; heartbeats show progress despite no text output\"}",
-        "latencyMs": 2509
+        "summary": "disposition=working; heartbeat shows progress despite no output",
+        "text": "{\"task\":\"T3\",\"verdict\":\"routine\",\"summary\":\"disposition=working; heartbeat shows progress despite no output\"}",
+        "latencyMs": 2568
       },
       {
         "task": "T4",
         "verdict": "captain",
-        "summary": "disposition=escalate_decision; Work needs a captain-owned decision",
-        "text": "{\"task\":\"T4\",\"verdict\":\"captain\",\"summary\":\"disposition=escalate_decision; Work needs a captain-owned decision\"}",
-        "latencyMs": 1940
+        "summary": "disposition=escalate_decision; expired credentials need captain-owned decision",
+        "text": "{\"task\":\"T4\",\"verdict\":\"captain\",\"summary\":\"disposition=escalate_decision; expired credentials need captain-owned decision\"}",
+        "latencyMs": 1707
       },
       {
         "task": "T5",
-        "verdict": "routine",
-        "summary": "disposition=surface_failure; worker exit with incomplete result visible",
-        "text": "{\"task\":\"T5\",\"verdict\":\"routine\",\"summary\":\"disposition=surface_failure; worker exit with incomplete result visible\"}",
-        "latencyMs": 8870
+        "verdict": "captain",
+        "summary": "disposition=recover_or_escalate; worker exit left incomplete result",
+        "text": "{\"task\":\"T5\",\"verdict\":\"captain\",\"summary\":\"disposition=recover_or_escalate; worker exit left incomplete result\"}",
+        "latencyMs": 6245
       },
       {
         "task": "T6",
         "verdict": "routine",
-        "summary": "disposition=preserve_state; duplicate and late older events ignored idempotently",
-        "text": "{\"task\":\"T6\",\"verdict\":\"routine\",\"summary\":\"disposition=preserve_state; duplicate and late older events ignored idempotently\"}",
-        "latencyMs": 3478
+        "summary": "disposition=preserve_state; deduplicate repeat and ignore late older event to keep newer state",
+        "text": "{\"task\":\"T6\",\"verdict\":\"routine\",\"summary\":\"disposition=preserve_state; deduplicate repeat and ignore late older event to keep newer state\"}",
+        "latencyMs": 2910
       }
     ],
-    "latencyMs": 22119,
-    "matchingDispositions": 5,
+    "latencyMs": 17684,
+    "matchingDispositions": 6,
     "grades": {
       "existing": true,
       "pi-durable": true
@@ -1075,110 +1075,110 @@
     "samples": [
       {
         "run": 1,
-        "existingMs": 350.7993779999997,
-        "durableMs": 382.8522350000021,
-        "existingWithFaultMs": 303.3369500000008,
-        "durableWithFaultMs": 329.9587050000009,
+        "existingMs": 367.46159500000067,
+        "durableMs": 385.4432280000001,
+        "existingWithFaultMs": 300.2885810000007,
+        "durableWithFaultMs": 336.04851800000324,
         "existingActions": 1,
         "durableActions": 1,
         "duplicateOutcomes": 0
       },
       {
         "run": 2,
-        "existingMs": 351.43511899999794,
-        "durableMs": 380.0714149999985,
-        "existingWithFaultMs": 301.47666200000094,
-        "durableWithFaultMs": 333.47977600000013,
+        "existingMs": 360.54689900000085,
+        "durableMs": 385.9968399999998,
+        "existingWithFaultMs": 304.9698380000009,
+        "durableWithFaultMs": 338.0410379999994,
         "existingActions": 1,
         "durableActions": 1,
         "duplicateOutcomes": 0
       },
       {
         "run": 3,
-        "existingMs": 360.88732099999834,
-        "durableMs": 378.3801280000007,
-        "existingWithFaultMs": 303.65958599999794,
-        "durableWithFaultMs": 333.25761700000294,
+        "existingMs": 354.0010110000003,
+        "durableMs": 382.41682899999796,
+        "existingWithFaultMs": 303.37630999999965,
+        "durableWithFaultMs": 335.8485279999986,
         "existingActions": 1,
         "durableActions": 1,
         "duplicateOutcomes": 0
       },
       {
         "run": 4,
-        "existingMs": 351.97834299999886,
-        "durableMs": 381.42554400000154,
-        "existingWithFaultMs": 295.9354499999972,
-        "durableWithFaultMs": 330.4677139999985,
+        "existingMs": 361.4388890000009,
+        "durableMs": 385.71916599999895,
+        "existingWithFaultMs": 306.613397000001,
+        "durableWithFaultMs": 337.95144399999845,
         "existingActions": 1,
         "durableActions": 1,
         "duplicateOutcomes": 0
       },
       {
         "run": 5,
-        "existingMs": 351.442707000002,
-        "durableMs": 379.7098709999991,
-        "existingWithFaultMs": 300.23165000000154,
-        "durableWithFaultMs": 332.80876200000057,
+        "existingMs": 365.27424099999917,
+        "durableMs": 380.7012360000008,
+        "existingWithFaultMs": 306.07440100000167,
+        "durableWithFaultMs": 334.3914589999986,
         "existingActions": 1,
         "durableActions": 1,
         "duplicateOutcomes": 0
       },
       {
         "run": 6,
-        "existingMs": 363.0052350000042,
-        "durableMs": 379.2224989999959,
-        "existingWithFaultMs": 313.9094019999975,
-        "durableWithFaultMs": 334.4013930000001,
+        "existingMs": 358.2863750000033,
+        "durableMs": 383.37759300000107,
+        "existingWithFaultMs": 301.49960400000055,
+        "durableWithFaultMs": 332.2198309999985,
         "existingActions": 1,
         "durableActions": 1,
         "duplicateOutcomes": 0
       },
       {
         "run": 7,
-        "existingMs": 356.7894789999991,
-        "durableMs": 380.91247699999803,
-        "existingWithFaultMs": 299.7368229999993,
-        "durableWithFaultMs": 329.7829899999997,
+        "existingMs": 353.58930500000133,
+        "durableMs": 378.8746850000025,
+        "existingWithFaultMs": 302.20966899999985,
+        "durableWithFaultMs": 332.70227700000396,
         "existingActions": 1,
         "durableActions": 1,
         "duplicateOutcomes": 0
       },
       {
         "run": 8,
-        "existingMs": 356.05720300000394,
-        "durableMs": 380.772868,
-        "existingWithFaultMs": 305.4621679999982,
-        "durableWithFaultMs": 331.75018100000307,
+        "existingMs": 352.50846199999796,
+        "durableMs": 383.7174260000029,
+        "existingWithFaultMs": 303.3467709999968,
+        "durableWithFaultMs": 325.5443030000024,
         "existingActions": 1,
         "durableActions": 1,
         "duplicateOutcomes": 0
       },
       {
         "run": 9,
-        "existingMs": 355.88230500000645,
-        "durableMs": 387.32429100000445,
-        "existingWithFaultMs": 299.3027460000012,
-        "durableWithFaultMs": 334.97095800000534,
+        "existingMs": 355.89568800000416,
+        "durableMs": 384.8920829999988,
+        "existingWithFaultMs": 305.6841429999986,
+        "durableWithFaultMs": 335.1988649999985,
         "existingActions": 1,
         "durableActions": 1,
         "duplicateOutcomes": 0
       },
       {
         "run": 10,
-        "existingMs": 356.2803750000021,
-        "durableMs": 382.61938299999747,
-        "existingWithFaultMs": 308.28492600000027,
-        "durableWithFaultMs": 335.97688899999775,
+        "existingMs": 361.7973310000016,
+        "durableMs": 381.758600000001,
+        "existingWithFaultMs": 305.0660680000001,
+        "durableWithFaultMs": 335.30039899999974,
         "existingActions": 1,
         "durableActions": 1,
         "duplicateOutcomes": 0
       }
     ],
     "medians": {
-      "existing": 355.9697540000052,
-      "piDurable": 380.842672499999,
-      "existingWithFault": 302.40680600000087,
-      "piDurableWithFault": 333.03318950000175
+      "existing": 359.4166370000021,
+      "piDurable": 383.547509500002,
+      "existingWithFault": 304.17307400000027,
+      "piDurableWithFault": 335.2496319999991
     },
     "noiseFloorPercent": 1,
     "manualActions": {

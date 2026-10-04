@@ -128,22 +128,22 @@ npm run typecheck      # tsc --noEmit -p tsconfig.json
 npm test               # node --test tests/*.test.ts
 ```
 
-Result on 2026-10-04: `npm run typecheck` exits 0, and `npm test` reports 55 tests, 55 pass, 0 fail.
+Result on 2026-10-04: `npm run typecheck` exits 0, and `npm test` reports 60 tests, 60 pass, 0 fail.
 The suite covers the P1A acceptance gate: two owner processes cannot open one store (in-process and cross-process), a wrong home or an incompatible protocol is refused, a repeated operation ID returns the original acceptance without a new execution, a changed payload or configuration under the same ID is refused, no secret reaches the store file, diagnostics, or a reply, and the message-size and outstanding-operation bounds hold.
 It also covers the P1B gate: restart returns to the original operation and conversation, stale work cannot execute a guarded mutation, and a fresh conversation is pinned to the narrow capability profile and cannot inherit an unrelated root configuration.
 It also covers the P1C bridge: a malformed candidate result is refused before any outcome is appended, a settled repeat with a receipt appends nothing, a sidecar refusal surfaces as a diagnosable bridge error, the provider selection defaults to the existing path, and an end-to-end dispatch through a real sidecar and the real outcome store appends exactly one outcome.
 The pinned Pi extension tests pass with the seam in place, including a `pi-durable` selection that routes one wake through the bridge into the existing outcome sink without running the in-process branch prompt.
 It also covers the P1D gate: a subscriber reconnects after missed observations and recovers every undelivered settlement, a snapshot or an accepted-but-unsettled operation is never a settlement, a duplicate settled result produces one observation, and the cursor refuses to advance past a settlement without its receipt.
 
-P2 adds the evaluation harness under `runtime/pi-durable/eval/`: the controlled six-task fleet with fixture truth, a scenario runner for both arms with barrier-based fault injection, an independent grader with four negative controls, the F01-F18 deterministic fault matrix, and a report generator.
+P2 adds the evaluation harness under `runtime/pi-durable/eval/`: the controlled six-task fleet with fixture truth, a scenario runner for both arms with barrier-based fault injection, an independent grader with four negative controls, the F01-F18 deterministic fault matrix, a disposable-container restart lane, a bounded real-model pilot, threshold calibration, and a report generator.
 
 ```sh
 cd runtime/pi-durable
-npm run eval           # runs the fleet, the F-matrix, and the grader; writes docs/pi-durable/06-evaluation-report.md and eval-results.json
+npm run eval           # runs the fleet, the F-matrix, the container restart lane, the real-model pilot, and the threshold calibration; writes docs/pi-durable/06-evaluation-report.md and eval-results.json
 ```
 
-Result on 2026-10-04: `npm test` reports 55 tests, 55 pass, 0 fail, including the harness end-to-end test.
-`npm run eval` records F01-F18 as 11 pass, 0 fail, 6 not-covered, and 1 known-gap.
+Result on 2026-10-04: `npm test` reports 60 tests, 60 pass, 0 fail, including the harness end-to-end test.
+`npm run eval` records F01-F18 as 17 pass, 0 fail, 1 not-covered, and 0 known-gap, plus a passing disposable-container restart lane for F11 and F17, a passing bounded real-model pilot, and calibrated improvement thresholds.
 Both arms pass the no-fault fleet; a fault at one task makes the reduced existing-path arm silently lose that task while the durable arm keeps it unresolved and receipt-gated.
 The four grader negative controls are all rejected.
 F05, F09, F11, F12, F16, and F17 are explicitly not covered (no read-tool boundary, no cancellation operation, no real credential provider, no VM or reboot boundary); F07 is a known reconciliation gap.

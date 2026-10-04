@@ -251,7 +251,7 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("");
   lines.push("- Arm A is a reduced model, not the full pinned Pi supervision extension; it demonstrates the durability gap of an in-process owner without durable acceptance, and does not exercise the extension's own recovery.");
   lines.push("- The faux model returns fixture truth, so this harness measures execution durability, not model judgment.");
-  lines.push("- F09 and F16 are not covered here: the routine-note delivery limitation is documented rather than re-tested, and the deterministic lanes run without a real credential provider.");
+  lines.push("- F09 is not covered here: the routine-note delivery limitation is documented rather than re-tested.");
   lines.push("- The outcome read-back reconciles a missing receipt by matching the row identity the store exposes (task, verdict, summary); two distinct operations that commit identical rows are indistinguishable, so that case still requires an explicit receipt.");
   lines.push("- The container lane shares the host pid namespace on purpose, because the runtime ownership lock records a pid and treats a live pid as a live owner; a containerized restart inside its own pid namespace would need an explicit lock reclaim first.");
   lines.push("- The container lane is a process and store boundary, not an OS reboot: it proves the store reopens and the recorded authority reconciles, not that a kernel or filesystem failure is survivable.");

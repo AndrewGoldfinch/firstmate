@@ -1,6 +1,6 @@
 # Pi Durable evaluation report (P2)
 
-Generated 2026-10-04T17:20:49.806Z.
+Generated 2026-10-04T17:25:42.920Z.
 
 ## Environment and scope
 
@@ -41,7 +41,7 @@ Arm B is the real durable sidecar, bridge, and outcome sink with a deterministic
 | F08 | after outcome commit, before adapter receipt | pass | reconciled=true replaySeq=1/1 outcomes=1 |
 | F09 | after delivery, before acknowledgement | not-covered | the existing routine-note delivery limitation is documented, not re-tested here |
 | F10 | stale generation cannot mutate | pass | code=AUTHORITY_STALE |
-| F11 | service crash with valid generation | pass | image=fm-pi-durable-lane:local docker=29.8.2 {"generation":1,"killed":true,"nodeInContainer":"v22.23.3","pid":207902} |
+| F11 | service crash with valid generation | pass | image=fm-pi-durable-lane:local docker=29.8.2 {"generation":1,"killed":true,"nodeInContainer":"v22.23.3","pid":325742} |
 | F12 | cancellation during tool execution | pass | intentBeforeAbort=true settledCancel=true state=cancelled runOutcome=INTERNAL outcomes=0 retainedState=cancelled unresolvedEffect=outcome-effect-unresolved unresolvedState=cancel-unresolved |
 | F13 | second owner refused | pass | refused=true |
 | F14 | observer reconnect recovers settlement | pass | settlements=1 |
@@ -67,18 +67,18 @@ docker run --rm --pid=host --user 1000:1000 -e FM_HOME=/home -v /home/andy/.tree
 ## Bounded real-model pilot
 
 Status: pass.
-Provider opencode-go, model muse-spark-1.3-contributor; 6 calls in 22119 ms with 0 timeouts.
+Provider opencode-go, model muse-spark-1.3-contributor; 6 calls in 17684 ms with 0 timeouts.
 Both arms ran against the same real model answers, so the arms differ only in execution durability; arm A completed=true, arm B completed=true.
-The model matched the fixture's required disposition on 5 of 6 tasks, so a real model does not simply reproduce the fixture.
+The model matched the fixture's required disposition on 6 of 6 tasks, so a real model does not simply reproduce the fixture.
 
 | Task | Verdict | Latency | Answer |
 | --- | --- | --- | --- |
-| T1 | routine | 3244 ms | disposition=ready_for_review; tests pass, awaiting review |
-| T2 | routine | 2077 ms | disposition=surface_failure; CI failing contradicts completion claim |
-| T3 | routine | 2509 ms | disposition=working; heartbeats show progress despite no text output |
-| T4 | captain | 1940 ms | disposition=escalate_decision; Work needs a captain-owned decision |
-| T5 | routine | 8870 ms | disposition=surface_failure; worker exit with incomplete result visible |
-| T6 | routine | 3478 ms | disposition=preserve_state; duplicate and late older events ignored idempotently |
+| T1 | routine | 1170 ms | disposition=ready_for_review; worker finished tests pass review pending |
+| T2 | routine | 3084 ms | disposition=surface_failure; worker claims done but CI failing |
+| T3 | routine | 2568 ms | disposition=working; heartbeat shows progress despite no output |
+| T4 | captain | 1707 ms | disposition=escalate_decision; expired credentials need captain-owned decision |
+| T5 | captain | 6245 ms | disposition=recover_or_escalate; worker exit left incomplete result |
+| T6 | routine | 2910 ms | disposition=preserve_state; deduplicate repeat and ignore late older event to keep newer state |
 
 ## Benefit scorecard (deterministic, calibrated)
 
@@ -89,12 +89,12 @@ The model matched the fixture's required disposition on 5 of 6 tasks, so a real 
 | Controlled ownership | Stale-owner actions | 0 | 0 | pass |
 | Useful visibility | Recoverable settlements | n/a | 6 | pass |
 | Reduced recovery burden | Manual recovery actions on the faulted fleet | 1 | 1 | parity |
-| Faster recovery | Median faulted-scenario time (ms) | 302 | 333 | unproven |
+| Faster recovery | Median faulted-scenario time (ms) | 304 | 335 | unproven |
 
 ## Threshold calibration
 
 Status: pass over 10 deterministic runs.
-Median scenario time (ms): arm A 356, arm B 381, arm A faulted 302, arm B faulted 333.
+Median scenario time (ms): arm A 359, arm B 384, arm A faulted 304, arm B faulted 335.
 Calibrated thresholds: at least 50% fewer manual recovery actions, at least 30% lower median faulted-scenario time, and healthy-scenario time within 15% of baseline.
 Measured noise floor: 1% of the faulted baseline median.
 Basis: measured over 10 deterministic runs: median absolute deviation of the faulted baseline is 1% of its median, so the recovery-time threshold is max(30%, 3x noise) and the healthy-latency tolerance is max(15%, 2x noise).
@@ -102,16 +102,16 @@ Verdicts: manual recovery actions parity, recovery time unproven, duplicate outc
 
 | Run | Arm A (ms) | Arm B (ms) | Arm A faulted (ms) | Arm B faulted (ms) |
 | --- | --- | --- | --- | --- |
-| 1 | 351 | 383 | 303 | 330 |
-| 2 | 351 | 380 | 301 | 333 |
-| 3 | 361 | 378 | 304 | 333 |
-| 4 | 352 | 381 | 296 | 330 |
-| 5 | 351 | 380 | 300 | 333 |
-| 6 | 363 | 379 | 314 | 334 |
-| 7 | 357 | 381 | 300 | 330 |
-| 8 | 356 | 381 | 305 | 332 |
-| 9 | 356 | 387 | 299 | 335 |
-| 10 | 356 | 383 | 308 | 336 |
+| 1 | 367 | 385 | 300 | 336 |
+| 2 | 361 | 386 | 305 | 338 |
+| 3 | 354 | 382 | 303 | 336 |
+| 4 | 361 | 386 | 307 | 338 |
+| 5 | 365 | 381 | 306 | 334 |
+| 6 | 358 | 383 | 301 | 332 |
+| 7 | 354 | 379 | 302 | 333 |
+| 8 | 353 | 384 | 303 | 326 |
+| 9 | 356 | 385 | 306 | 335 |
+| 10 | 362 | 382 | 305 | 335 |
 
 ## Raw evidence
 
@@ -122,7 +122,7 @@ Each arm records the outcome rows, adapter operation records, effects, faults, a
 
 - Arm A is a reduced model, not the full pinned Pi supervision extension; it demonstrates the durability gap of an in-process owner without durable acceptance, and does not exercise the extension's own recovery.
 - The faux model returns fixture truth, so this harness measures execution durability, not model judgment.
-- F09 and F16 are not covered here: the routine-note delivery limitation is documented rather than re-tested, and the deterministic lanes run without a real credential provider.
+- F09 is not covered here: the routine-note delivery limitation is documented rather than re-tested.
 - The outcome read-back reconciles a missing receipt by matching the row identity the store exposes (task, verdict, summary); two distinct operations that commit identical rows are indistinguishable, so that case still requires an explicit receipt.
 - The container lane shares the host pid namespace on purpose, because the runtime ownership lock records a pid and treats a live pid as a live owner; a containerized restart inside its own pid namespace would need an explicit lock reclaim first.
 - The container lane is a process and store boundary, not an OS reboot: it proves the store reopens and the recorded authority reconciles, not that a kernel or filesystem failure is survivable.

@@ -16,6 +16,7 @@
 # Exit status is 0 when both cases pass or when the lane is honestly not-covered
 # (no Docker daemon or image), and 1 when a case fails.
 set -uo pipefail
+# shellcheck disable=SC2016  # node -e program text: no shell expansion is intended
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -33,8 +34,6 @@ name="fm-pi-durable-lane-$$"
 killed=false
 serve_state=""
 verify_result=""
-covered=true
-reason=""
 
 cleanup() {
   docker kill "$name" >/dev/null 2>&1 || true
@@ -45,6 +44,7 @@ trap cleanup EXIT
 
 emit_not_covered() {
   local why="$1"
+  # shellcheck disable=SC2016  # node -e program text: no shell expansion is intended
   node -e '
     const [reason, image, dockerVersion] = process.argv.slice(1);
     process.stdout.write(`${JSON.stringify({
@@ -108,6 +108,7 @@ while [ "$SECONDS" -lt "$deadline" ]; do
 done
 
 if [ -z "$serve_state" ]; then
+  # shellcheck disable=SC2016  # node -e program text: no shell expansion is intended
   node -e '
     const [image, dockerVersion, logs, serveCommand] = process.argv.slice(1);
     process.stdout.write(`${JSON.stringify({
@@ -132,6 +133,7 @@ verify_output="$("${verify_cmd[@]}" 2>&1)"
 verify_result="$(printf '%s\n' "$verify_output" | sed -n 's/^VERIFY_RESULT //p' | tail -1)"
 
 if [ -z "$verify_result" ]; then
+  # shellcheck disable=SC2016  # node -e program text: no shell expansion is intended
   node -e '
     const [image, dockerVersion, output, serveCommand, verifyCommand] = process.argv.slice(1);
     process.stdout.write(`${JSON.stringify({
@@ -146,17 +148,19 @@ if [ -z "$verify_result" ]; then
   exit 1
 fi
 
-SERVE_STATE="$serve_state" \
-VERIFY_RESULT="$verify_result" \
-DOCKER_SERVER="$docker_server" \
-IMAGE="$IMAGE" \
-KILLED="$killed" \
-BUILD_COMMAND="$build_command" \
-SERVE_COMMAND="${serve_cmd[*]}" \
-VERIFY_COMMAND="${verify_cmd[*]}" \
-WORKDIR="$workdir" \
-CONTAINER_NAME="$name" \
-OUT="$OUT" \
+# shellcheck disable=SC2034  # these are consumed by the node -e program below, not by the shell
+export SERVE_STATE="$serve_state"
+export VERIFY_RESULT="$verify_result"
+export DOCKER_SERVER="$docker_server"
+export IMAGE
+export KILLED="$killed"
+export BUILD_COMMAND="$build_command"
+export SERVE_COMMAND="${serve_cmd[*]}"
+export VERIFY_COMMAND="${verify_cmd[*]}"
+export WORKDIR="$workdir"
+export CONTAINER_NAME="$name"
+export OUT
+# shellcheck disable=SC2016  # node -e program text: no shell expansion is intended
 node -e '
   const serve = JSON.parse(process.env.SERVE_STATE);
   const verify = JSON.parse(process.env.VERIFY_RESULT);
