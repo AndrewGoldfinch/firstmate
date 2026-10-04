@@ -1,6 +1,6 @@
 # Pi Durable evaluation report (P2)
 
-Generated 2026-10-04T17:25:42.920Z.
+Generated 2026-10-04T17:28:02.350Z.
 
 ## Environment and scope
 
@@ -41,7 +41,7 @@ Arm B is the real durable sidecar, bridge, and outcome sink with a deterministic
 | F08 | after outcome commit, before adapter receipt | pass | reconciled=true replaySeq=1/1 outcomes=1 |
 | F09 | after delivery, before acknowledgement | not-covered | the existing routine-note delivery limitation is documented, not re-tested here |
 | F10 | stale generation cannot mutate | pass | code=AUTHORITY_STALE |
-| F11 | service crash with valid generation | pass | image=fm-pi-durable-lane:local docker=29.8.2 {"generation":1,"killed":true,"nodeInContainer":"v22.23.3","pid":325742} |
+| F11 | service crash with valid generation | pass | image=fm-pi-durable-lane:local docker=29.8.2 {"generation":1,"killed":true,"nodeInContainer":"v22.23.3","pid":355357} |
 | F12 | cancellation during tool execution | pass | intentBeforeAbort=true settledCancel=true state=cancelled runOutcome=INTERNAL outcomes=0 retainedState=cancelled unresolvedEffect=outcome-effect-unresolved unresolvedState=cancel-unresolved |
 | F13 | second owner refused | pass | refused=true |
 | F14 | observer reconnect recovers settlement | pass | settlements=1 |
@@ -67,18 +67,18 @@ docker run --rm --pid=host --user 1000:1000 -e FM_HOME=/home -v /home/andy/.tree
 ## Bounded real-model pilot
 
 Status: pass.
-Provider opencode-go, model muse-spark-1.3-contributor; 6 calls in 17684 ms with 0 timeouts.
+Provider opencode-go, model muse-spark-1.3-contributor; 6 calls in 18395 ms with 0 timeouts.
 Both arms ran against the same real model answers, so the arms differ only in execution durability; arm A completed=true, arm B completed=true.
 The model matched the fixture's required disposition on 6 of 6 tasks, so a real model does not simply reproduce the fixture.
 
 | Task | Verdict | Latency | Answer |
 | --- | --- | --- | --- |
-| T1 | routine | 1170 ms | disposition=ready_for_review; worker finished tests pass review pending |
-| T2 | routine | 3084 ms | disposition=surface_failure; worker claims done but CI failing |
-| T3 | routine | 2568 ms | disposition=working; heartbeat shows progress despite no output |
-| T4 | captain | 1707 ms | disposition=escalate_decision; expired credentials need captain-owned decision |
-| T5 | captain | 6245 ms | disposition=recover_or_escalate; worker exit left incomplete result |
-| T6 | routine | 2910 ms | disposition=preserve_state; deduplicate repeat and ignore late older event to keep newer state |
+| T1 | routine | 3771 ms | disposition=ready_for_review; tests pass, pending review |
+| T2 | routine | 1908 ms | disposition=surface_failure; CI failing contradicts completion claim |
+| T3 | routine | 2691 ms | disposition=working; live worker and heartbeat show progress despite quiet output |
+| T4 | captain | 1620 ms | disposition=escalate_decision; expired credentials needs captain-owned decision |
+| T5 | routine | 5148 ms | disposition=recover_or_escalate; worker exit with incomplete result needs retry |
+| T6 | routine | 3256 ms | disposition=preserve_state; duplicate and late stale event ignored, no state change |
 
 ## Benefit scorecard (deterministic, calibrated)
 
@@ -89,29 +89,29 @@ The model matched the fixture's required disposition on 6 of 6 tasks, so a real 
 | Controlled ownership | Stale-owner actions | 0 | 0 | pass |
 | Useful visibility | Recoverable settlements | n/a | 6 | pass |
 | Reduced recovery burden | Manual recovery actions on the faulted fleet | 1 | 1 | parity |
-| Faster recovery | Median faulted-scenario time (ms) | 304 | 335 | unproven |
+| Faster recovery | Median faulted-scenario time (ms) | 356 | 387 | unproven |
 
 ## Threshold calibration
 
 Status: pass over 10 deterministic runs.
-Median scenario time (ms): arm A 359, arm B 384, arm A faulted 304, arm B faulted 335.
+Median scenario time (ms): arm A 423, arm B 454, arm A faulted 356, arm B faulted 387.
 Calibrated thresholds: at least 50% fewer manual recovery actions, at least 30% lower median faulted-scenario time, and healthy-scenario time within 15% of baseline.
-Measured noise floor: 1% of the faulted baseline median.
-Basis: measured over 10 deterministic runs: median absolute deviation of the faulted baseline is 1% of its median, so the recovery-time threshold is max(30%, 3x noise) and the healthy-latency tolerance is max(15%, 2x noise).
+Measured noise floor: 3% of the faulted baseline median.
+Basis: measured over 10 deterministic runs: median absolute deviation of the faulted baseline is 3% of its median, so the recovery-time threshold is max(30%, 3x noise) and the healthy-latency tolerance is max(15%, 2x noise).
 Verdicts: manual recovery actions parity, recovery time unproven, duplicate outcomes preserved.
 
 | Run | Arm A (ms) | Arm B (ms) | Arm A faulted (ms) | Arm B faulted (ms) |
 | --- | --- | --- | --- | --- |
-| 1 | 367 | 385 | 300 | 336 |
-| 2 | 361 | 386 | 305 | 338 |
-| 3 | 354 | 382 | 303 | 336 |
-| 4 | 361 | 386 | 307 | 338 |
-| 5 | 365 | 381 | 306 | 334 |
-| 6 | 358 | 383 | 301 | 332 |
-| 7 | 354 | 379 | 302 | 333 |
-| 8 | 353 | 384 | 303 | 326 |
-| 9 | 356 | 385 | 306 | 335 |
-| 10 | 362 | 382 | 305 | 335 |
+| 1 | 434 | 454 | 362 | 400 |
+| 2 | 435 | 458 | 355 | 388 |
+| 3 | 421 | 447 | 350 | 399 |
+| 4 | 426 | 454 | 366 | 401 |
+| 5 | 431 | 470 | 356 | 386 |
+| 6 | 415 | 461 | 359 | 405 |
+| 7 | 425 | 470 | 364 | 377 |
+| 8 | 400 | 411 | 347 | 382 |
+| 9 | 407 | 438 | 335 | 372 |
+| 10 | 401 | 433 | 342 | 371 |
 
 ## Raw evidence
 

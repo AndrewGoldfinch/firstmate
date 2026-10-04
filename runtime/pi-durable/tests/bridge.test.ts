@@ -185,8 +185,7 @@ test("a read-back that cannot answer keeps the refusal instead of guessing", asy
   });
   await assert.rejects(
     () => runDurableDispatch({ transport, sink }, { operationId: "op-1", prompt: "p", payload: {} }),
-    (error: unknown) =>
-      error instanceof Error && error.message === "outcome store unreadable",
+    (error: unknown) => error instanceof BridgeError && error.code === "RECONCILE_REQUIRED",
   );
   assert.deepEqual(appended, []);
   assert.deepEqual(receipts, []);

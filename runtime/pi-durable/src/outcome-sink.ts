@@ -46,6 +46,38 @@ async function runOutcomeScript(
 type OutcomeRow = { seq?: unknown; task?: unknown; verdict?: unknown; summary?: unknown };
 
 /**
+ * Match one result against the rows the store returned.
+ *
+ * A full window may have been truncated, so absence cannot be proven from it;
+ * that case refuses instead of guessing, because guessing would append a
+ * duplicate outcome.
+ */
+export function matchOutcomeRow(
+  rows: readonly string[],
+  result: CandidateResult,
+  window = PROBE_RECENT,
+): number | null {
+  if (rows.length >= window) {
+    throw new Error(`outcome store window of ${window} rows is full, so absence cannot be proven`);
+  }
+  for (const line of rows) {
+    const row = JSON.parse(line) as OutcomeRow;
+    if (
+      row.task !== result.task ||
+      row.verdict !== result.verdict ||
+      row.summary !== result.summary
+    ) {
+      continue;
+    }
+    if (typeof row.seq !== "number") {
+      throw new Error("fm-branch-outcome.sh list returned a matching row without a numeric seq");
+    }
+    return row.seq;
+  }
+  return null;
+}
+
+/**
  * Build an outcome sink that appends through `bin/fm-branch-outcome.sh`.
  *
  * `probe` reads the same store back through `list`, so a settled result whose
@@ -94,22 +126,10 @@ export function createOutcomeSink(options: OutcomeSinkOptions): OutcomeSink {
           `fm-branch-outcome.sh list exited ${code ?? "none"}: ${stderr.trim()}`,
         );
       }
-      for (const line of stdout.split("\n")) {
-        if (line.trim().length === 0) continue;
-        const row = JSON.parse(line) as OutcomeRow;
-        if (
-          row.task !== result.task ||
-          row.verdict !== result.verdict ||
-          row.summary !== result.summary
-        ) {
-          continue;
-        }
-        if (typeof row.seq !== "number") {
-          throw new Error("fm-branch-outcome.sh list returned a matching row without a numeric seq");
-        }
-        return row.seq;
-      }
-      return null;
+      return matchOutcomeRow(
+        stdout.split("\n").filter((line) => line.trim().length > 0),
+        result,
+      );
     },
   };
 }

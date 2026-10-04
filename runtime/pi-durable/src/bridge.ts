@@ -149,7 +149,17 @@ export async function runDurableDispatch(
       );
     }
     const candidate = parseCandidateResult(dispatched.result);
-    const committed = await deps.sink.probe(candidate);
+    let committed: number | null;
+    try {
+      committed = await deps.sink.probe(candidate);
+    } catch (error) {
+      // An undecidable read-back is not a licence to append blindly.
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new BridgeError(
+        "RECONCILE_REQUIRED",
+        `settled result has no committed outcome receipt and the read-back could not decide (${reason}); reconcile before retrying`,
+      );
+    }
     if (committed !== null) {
       await deps.transport.recordReceipt(input.operationId, committed);
       return { seq: committed, replayed: true, reconciled: true };
