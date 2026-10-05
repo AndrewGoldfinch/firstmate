@@ -481,6 +481,62 @@ exec "$FM_F09_BASH" "$@"
       await kill(second);
     }
     {
+      const home = setup("reservation-crash-before-record");
+      const first = await launch(home);
+      grant(home, first);
+      await first.request("pause-before-write");
+      const blocked = first.request("start");
+      blocked.catch(() => {});
+      // Wait for the real SIGSTOP before the session append: the home-wide
+      // reservation is committed, but no durable record exists yet.
+      let stopped = false;
+      for (let i = 0; i < 300; i++) {
+        const status = execFileSync("ps", ["-o", "stat=", "-p", String(first.child.pid)], { encoding: "utf8" });
+        if (fs.existsSync(join(home, "before-write")) && status.trim().startsWith("T")) { stopped = true; break; }
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      assert.ok(stopped, "the owner must reach the reservation-before-record barrier");
+      assert.equal(fs.readdirSync(join(home, "state/.branch-outcomes-delivered")).length, 1,
+        "the reservation must be committed before the durable append");
+      assert.equal(readJsonl(first.ready.sessionFile).filter(isNote).length, 0,
+        "no durable record may exist before the append");
+      // Crash, not suspend: the reservation survives with no record behind it.
+      await kill(first);
+      // The recorded destination must reclaim the stale reservation and retry.
+      const second = await launch(home);
+      grant(home, second);
+      const recovered = observe(home, "recorded-destination-reclaims-strand", await second.request("start"));
+      assert.equal(recovered.diskRecords, 1, "the stranded reservation must recover exactly one durable record");
+      assert.equal(recovered.unread, 0);
+      assert.equal(recovered.deliveryMarkers, 0, "recovery must not leave a stranded reservation");
+      await kill(second);
+    }
+    {
+      const home = setup("reservation-crash-fresh-destination");
+      const first = await launch(home);
+      grant(home, first);
+      await first.request("pause-before-write");
+      const blocked = first.request("start");
+      blocked.catch(() => {});
+      let stopped = false;
+      for (let i = 0; i < 300; i++) {
+        const status = execFileSync("ps", ["-o", "stat=", "-p", String(first.child.pid)], { encoding: "utf8" });
+        if (fs.existsSync(join(home, "before-write")) && status.trim().startsWith("T")) { stopped = true; break; }
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      assert.ok(stopped, "the owner must reach the reservation-before-record barrier");
+      await kill(first);
+      // A fresh destination reconciles the recorded destination, finds no
+      // record there, and must reclaim rather than defer forever.
+      const second = await launch(home, { destination: "replacement" });
+      grant(home, second);
+      const recovered = observe(home, "fresh-destination-reclaims-strand", await second.request("start"));
+      assert.equal(recovered.diskRecords, 1, "a fresh destination must reclaim and deliver");
+      assert.equal(recovered.unread, 0);
+      assert.equal(recovered.deliveryMarkers, 0);
+      await kill(second);
+    }
+    {
       const home = setup("leaked-marker-reclaim");
       const first = await launch(home);
       grant(home, first);

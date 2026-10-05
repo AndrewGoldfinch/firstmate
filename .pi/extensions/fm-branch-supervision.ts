@@ -1136,21 +1136,54 @@ export default function (pi: ExtensionAPI) {
   // deliveryId so a stale owner can tell its own committed record from a
   // sibling's.
   const deliveryCommitted = (seq: number): boolean => existsSync(deliveredMarkerPath(seq));
-  const readCommittedDeliveryId = (seq: number): string | null => {
+  // A home-wide delivery reservation. `reserved` names an owner that has claimed
+  // the sequence but has not proven a durable record yet; `committed` names a
+  // verified durable record in `destination`. A legacy marker stores a bare
+  // deliveryId (or nothing) and reads as committed, never reclaimable.
+  type DeliveryReservation = {
+    version: 2;
+    status: "reserved" | "committed";
+    owner: string;
+    generation: number;
+    destination: string;
+    deliveryId: string;
+  };
+  const serializeReservation = (reservation: DeliveryReservation): string => JSON.stringify(reservation);
+  const parseReservation = (text: string): DeliveryReservation | null => {
+    if (!text) return null;
     try {
-      return readFileSync(deliveredMarkerPath(seq), "utf8").trim() || null;
+      const value = JSON.parse(text) as Partial<DeliveryReservation> | null;
+      if (value && value.version === 2
+        && (value.status === "reserved" || value.status === "committed")
+        && typeof value.owner === "string" && typeof value.generation === "number"
+        && typeof value.destination === "string" && typeof value.deliveryId === "string") {
+        return value as DeliveryReservation;
+      }
+    } catch {
+      // A legacy marker stores a bare deliveryId.
+    }
+    return { version: 2, status: "committed", owner: "", generation: -1, destination: "", deliveryId: text };
+  };
+  const readReservation = (seq: number): DeliveryReservation | null => {
+    try {
+      return parseReservation(readFileSync(deliveredMarkerPath(seq), "utf8").trim());
     } catch {
       return null;
     }
   };
+  const readCommittedDeliveryId = (seq: number): string | null => readReservation(seq)?.deliveryId ?? null;
 
   // The atomic home-wide claim for one routine sequence. O_EXCL is the fence:
   // exactly one owner in the home creates it, and a replacement destination
   // consults it instead of delivering the same logical note a second time.
-  function commitDelivery(seq: number, deliveryId: string | null): boolean {
+  function commitDelivery(seq: number, deliveryId: string): boolean {
+    const reservation: DeliveryReservation = {
+      version: 2, status: "reserved", owner: String(process.pid), generation,
+      destination: currentMainSession?.getSessionFile() ?? "", deliveryId,
+    };
     try {
       mkdirSync(deliveredMarkerDir, { recursive: true });
-      writeFileSync(deliveredMarkerPath(seq), deliveryId ?? "", { flag: "wx", mode: 0o600 });
+      writeFileSync(deliveredMarkerPath(seq), serializeReservation(reservation), { flag: "wx", mode: 0o600 });
       return true;
     } catch {
       return false;
@@ -1161,7 +1194,8 @@ export default function (pi: ExtensionAPI) {
   // so a failure after reserving never strands a marker and never removes a
   // winner's marker.
   function releaseReservation(seq: number, reservedId: string): void {
-    if (readCommittedDeliveryId(seq) !== reservedId) return;
+    const reservation = readReservation(seq);
+    if (!reservation || reservation.deliveryId !== reservedId) return;
     try {
       rmSync(deliveredMarkerPath(seq), { force: true });
     } catch {
@@ -1169,15 +1203,36 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  // Name an owned reservation with the identity of the record that actually
-  // survived, so a later reader can tell a committed record from a sibling.
-  function claimReservationId(seq: number, reservedId: string, deliveryId: string): void {
-    if (readCommittedDeliveryId(seq) !== reservedId) return;
+  // Verify and record the durable delivery identity for an owned reservation.
+  // Only the reservation this owner created is rewritten; the marker then names
+  // the exact record that survived, so a later reader can tell a committed
+  // record from a sibling.
+  function markDeliveryCommitted(seq: number, reservedId: string, deliveryId: string): void {
+    const reservation = readReservation(seq);
+    if (!reservation || reservation.deliveryId !== reservedId) return;
     try {
-      writeFileSync(deliveredMarkerPath(seq), deliveryId, { mode: 0o600 });
+      writeFileSync(deliveredMarkerPath(seq), serializeReservation({
+        version: 2, status: "committed", owner: reservation.owner, generation: reservation.generation,
+        destination: reservation.destination || (currentMainSession?.getSessionFile() ?? ""), deliveryId,
+      }), { mode: 0o600 });
     } catch {
-      // Best effort; the marker keeps the reserved identity, which still marks
-      // the sequence delivered.
+      // Best effort; the reserved identity still marks the sequence delivered.
+    }
+  }
+
+  // Reclaim a stale owner's reservation under this generation. The exact stored
+  // content must still match, so a concurrent winner is never clobbered.
+  function reclaimReservation(seq: number, stale: DeliveryReservation, deliveryId: string): boolean {
+    const replacement: DeliveryReservation = {
+      version: 2, status: "reserved", owner: String(process.pid), generation,
+      destination: currentMainSession?.getSessionFile() ?? "", deliveryId,
+    };
+    try {
+      if (readFileSync(deliveredMarkerPath(seq), "utf8").trim() !== serializeReservation(stale)) return false;
+      writeFileSync(deliveredMarkerPath(seq), serializeReservation(replacement), { mode: 0o600 });
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -1322,9 +1377,98 @@ export default function (pi: ExtensionAPI) {
     return true;
   }
 
+  // Reconcile a reservation's recorded destination for the exact durable record
+  // it promises. "durable" adopts the delivery, "absent" allows a stale
+  // reservation to be reclaimed, and "defer" means an owner may still be
+  // writing or a conflicting record exists.
+  type RecordedDelivery = { state: "durable"; deliveryId: string | null } | { state: "absent" } | { state: "defer" };
+  function recordedDelivery(row: OutcomeRow, reservation: DeliveryReservation): RecordedDelivery {
+    const currentFile = currentMainSession?.getSessionFile();
+    if (reservation.destination && currentFile && reservation.destination === currentFile) {
+      const scanned = scanDurableDelivery(row, VISIBLE_ROUTINE_ENTRY_TYPE, parseRoutineDeliveryRecord);
+      if (scanned.state === "durable") return { state: "durable", deliveryId: scanned.deliveryId };
+      return scanned.state === "conflict" || scanned.state === "pending" ? { state: "defer" } : { state: "absent" };
+    }
+    if (!reservation.destination) return { state: "absent" };
+    let text: string;
+    try {
+      text = readFileSync(reservation.destination, "utf8");
+    } catch {
+      return { state: "absent" };
+    }
+    let found: RecordedDelivery = { state: "absent" };
+    for (const line of text.split("\n")) {
+      if (!line) continue;
+      let entry: { type?: unknown; customType?: unknown; data?: unknown };
+      try {
+        entry = JSON.parse(line) as { type?: unknown; customType?: unknown; data?: unknown };
+      } catch {
+        continue;
+      }
+      if (entry.type !== "custom" || entry.customType !== VISIBLE_ROUTINE_ENTRY_TYPE) continue;
+      const parsed = parseRoutineDeliveryRecord(entry.data);
+      if (!parsed || parsed.seq !== row.seq) continue;
+      if (!sameOutcome(parsed, row)) return { state: "defer" };
+      const candidate = (entry.data as { deliveryId?: unknown }).deliveryId;
+      found = { state: "durable", deliveryId: typeof candidate === "string" ? candidate : null };
+    }
+    return found;
+  }
+
+  // A stale reservation is one whose owner no longer owns the shared lock or
+  // whose generation has been replaced. Reclaiming is fenced on this session
+  // owning the lock, so two replacements never both retry the same reservation.
+  function reservationReclaimable(reservation: DeliveryReservation): boolean {
+    if (reservation.status !== "reserved" || !reservation.owner || reservation.generation < 0) return false;
+    if (!generationOwnsLockSync(generation)) return false;
+    if (reservation.owner === String(process.pid) && reservation.generation === generation) return true;
+    return !pidAlive(reservation.owner);
+  }
+
+  // Shared tail of a fresh and a reclaimed reservation: append the durable
+  // record, then verify and name the delivery identity that actually survived.
+  function appendUnderReservation(row: OutcomeRow, reservedId: string, expectedGeneration: number): boolean {
+    const delivered = appendDurableOutcome(row, VISIBLE_ROUTINE_ENTRY_TYPE, parseRoutineDeliveryRecord, expectedGeneration, reservedId);
+    if (!delivered.ok) {
+      if (delivered.durable) {
+        // The record survived even though this owner lost the fence: name the
+        // marker with the surviving identity and keep the delivery.
+        markDeliveryCommitted(row.seq, reservedId, delivered.deliveryId ?? reservedId);
+        return true;
+      }
+      // No durable record was written: release the reservation so the row stays
+      // recoverable instead of stranding a marker with nothing behind it.
+      releaseReservation(row.seq, reservedId);
+      return false;
+    }
+    // The record may have been an already-durable match rather than the one
+    // this call appended; name the marker with the surviving identity.
+    markDeliveryCommitted(row.seq, reservedId, delivered.deliveryId ?? reservedId);
+    return true;
+  }
+
   function ensureRoutineOutcome(row: OutcomeRow, expectedGeneration: number): boolean {
     if (!currentMainSession || row.verdict !== "routine") return false;
-    if (deliveryCommitted(row.seq)) return adoptDurableDelivery(row);
+    const reservation = readReservation(row.seq);
+    if (reservation) {
+      // Reconcile the recorded destination first: a durable record there means
+      // the reservation is committed even when the marker was never rewritten.
+      const recorded = recordedDelivery(row, reservation);
+      if (recorded.state === "durable") {
+        if (reservation.status !== "committed" || (recorded.deliveryId && recorded.deliveryId !== reservation.deliveryId)) {
+          markDeliveryCommitted(row.seq, reservation.deliveryId, recorded.deliveryId ?? reservation.deliveryId);
+        }
+        return adoptDurableDelivery(row);
+      }
+      if (recorded.state === "defer" || !reservationReclaimable(reservation)) return false;
+      // The owner is stale and holds no record: reclaim under this generation
+      // and retry. A lost claim means a sibling committed first.
+      const reclaimedId = randomUUID();
+      if (!reclaimReservation(row.seq, reservation, reclaimedId)) {
+        return deliveryCommitted(row.seq) ? adoptDurableDelivery(row) : false;
+      }
+      return appendUnderReservation(row, reclaimedId, expectedGeneration);
+    }
     // Reserve the home-wide delivery identity BEFORE writing the record, with
     // O_EXCL deciding the single winner. A destination that loses the race sees
     // a winner's marker and never appends a competing durable record, which is
@@ -1337,27 +1481,7 @@ export default function (pi: ExtensionAPI) {
       // closed and leaves the row unread rather than claiming a delivery.
       return deliveryCommitted(row.seq) ? adoptDurableDelivery(row) : false;
     }
-    const delivered = appendDurableOutcome(row, VISIBLE_ROUTINE_ENTRY_TYPE, parseRoutineDeliveryRecord, expectedGeneration, reservedId);
-    if (!delivered.ok) {
-      if (delivered.durable) {
-        // The record survived even though this owner lost the fence: name the
-        // marker with the surviving identity and keep the delivery.
-        if (delivered.deliveryId && delivered.deliveryId !== reservedId) {
-          claimReservationId(row.seq, reservedId, delivered.deliveryId);
-        }
-        return true;
-      }
-      // No durable record was written: release the reservation so the row stays
-      // recoverable instead of stranding a marker with nothing behind it.
-      releaseReservation(row.seq, reservedId);
-      return false;
-    }
-    // The record may have been an already-durable match rather than the one
-    // this call appended; name the marker with the surviving identity.
-    if (delivered.deliveryId && delivered.deliveryId !== reservedId) {
-      claimReservationId(row.seq, reservedId, delivered.deliveryId);
-    }
-    return true;
+    return appendUnderReservation(row, reservedId, expectedGeneration);
   }
 
   // Captain rows that are read (their visible entry exists) but not yet
