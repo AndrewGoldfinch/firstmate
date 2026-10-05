@@ -76,7 +76,7 @@
 // its deliberate limits.
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 // Pi exposes pi-ai to extensions as a first-class module in both its Node
@@ -1062,15 +1062,17 @@ export default function (pi: ExtensionAPI) {
   // would lose the only committed delivery; a home-wide marker that names a
   // different record, or a different record still in the session file, is the
   // proof that a sibling exists.
-  function rollbackDeliveryEntry(seq: number, file: string | undefined, customType: string, deliveryId: string): void {
+  function rollbackDeliveryEntry(seq: number, file: string | undefined, customType: string, deliveryId: string, force = false): void {
     if (!file) return;
-    const committedId = readCommittedDeliveryId(seq);
-    // Our own record is the committed delivery (possibly adopted by a
-    // replacement), so the stale owner must leave it in place.
-    if (committedId === deliveryId) return;
-    // No marker names a winner: only remove ours when a sibling for the same
-    // sequence is still recorded, otherwise ours is the only durable copy.
-    if (committedId === null && !hasSiblingDelivery(file, customType, seq, deliveryId)) return;
+    if (!force) {
+      const committedId = readCommittedDeliveryId(seq);
+      // Our own record is the committed delivery (possibly adopted by a
+      // replacement), so the stale owner must leave it in place.
+      if (committedId === deliveryId) return;
+      // No marker names a winner: only remove ours when a sibling for the same
+      // sequence is still recorded, otherwise ours is the only durable copy.
+      if (committedId === null && !hasSiblingDelivery(file, customType, seq, deliveryId)) return;
+    }
     let text: string;
     try {
       text = readFileSync(file, "utf8");
@@ -1136,6 +1138,30 @@ export default function (pi: ExtensionAPI) {
   // deliveryId so a stale owner can tell its own committed record from a
   // sibling's.
   const deliveryCommitted = (seq: number): boolean => existsSync(deliveredMarkerPath(seq));
+
+  // Marker writes are atomic: the bytes land in a sibling temp file, then a
+  // rename publishes them (overwrite) or a link publishes a claim only when
+  // the marker does not yet exist. A crash can therefore never leave a
+  // truncated or empty reservation stranded behind the note.
+  const markerTempPath = (path: string): string => `${path}.${process.pid}.${randomUUID()}.tmp`;
+  function writeMarkerAtomic(path: string, contents: string): void {
+    const temporaryPath = markerTempPath(path);
+    try {
+      writeFileSync(temporaryPath, contents, { mode: 0o600 });
+      renameSync(temporaryPath, path);
+    } finally {
+      rmSync(temporaryPath, { force: true });
+    }
+  }
+  function createMarkerAtomic(path: string, contents: string): void {
+    const temporaryPath = markerTempPath(path);
+    try {
+      writeFileSync(temporaryPath, contents, { mode: 0o600 });
+      linkSync(temporaryPath, path);
+    } finally {
+      rmSync(temporaryPath, { force: true });
+    }
+  }
   // A home-wide delivery reservation. `reserved` names an owner that has claimed
   // the sequence but has not proven a durable record yet; `committed` names a
   // verified durable record in `destination`. A legacy marker stores a bare
@@ -1183,7 +1209,7 @@ export default function (pi: ExtensionAPI) {
     };
     try {
       mkdirSync(deliveredMarkerDir, { recursive: true });
-      writeFileSync(deliveredMarkerPath(seq), serializeReservation(reservation), { flag: "wx", mode: 0o600 });
+      createMarkerAtomic(deliveredMarkerPath(seq), serializeReservation(reservation));
       return true;
     } catch {
       return false;
@@ -1211,10 +1237,10 @@ export default function (pi: ExtensionAPI) {
     const reservation = readReservation(seq);
     if (!reservation || reservation.deliveryId !== reservedId) return;
     try {
-      writeFileSync(deliveredMarkerPath(seq), serializeReservation({
+      writeMarkerAtomic(deliveredMarkerPath(seq), serializeReservation({
         version: 2, status: "committed", owner: reservation.owner, generation: reservation.generation,
         destination: reservation.destination || (currentMainSession?.getSessionFile() ?? ""), deliveryId,
-      }), { mode: 0o600 });
+      }));
     } catch {
       // Best effort; the reserved identity still marks the sequence delivered.
     }
@@ -1223,13 +1249,25 @@ export default function (pi: ExtensionAPI) {
   // Reclaim a stale owner's reservation under this generation. The exact stored
   // content must still match, so a concurrent winner is never clobbered.
   function reclaimReservation(seq: number, stale: DeliveryReservation, deliveryId: string): boolean {
+    const target = deliveredMarkerPath(seq);
     const replacement: DeliveryReservation = {
       version: 2, status: "reserved", owner: String(process.pid), generation,
       destination: currentMainSession?.getSessionFile() ?? "", deliveryId,
     };
     try {
-      if (readFileSync(deliveredMarkerPath(seq), "utf8").trim() !== serializeReservation(stale)) return false;
-      writeFileSync(deliveredMarkerPath(seq), serializeReservation(replacement), { mode: 0o600 });
+      // Compare first: only the exact stored bytes may be replaced, so a
+      // concurrent winner is never clobbered by bytes that no longer match.
+      if (readFileSync(target, "utf8").trim() !== serializeReservation(stale)) return false;
+      const temporaryPath = markerTempPath(target);
+      try {
+        writeFileSync(temporaryPath, serializeReservation(replacement), { mode: 0o600 });
+        // Re-check the fence after the compare and before publishing: a
+        // takeover in that window aborts rather than overwriting the winner.
+        if (!generationOwnsLockSync(generation)) return false;
+        renameSync(temporaryPath, target);
+      } finally {
+        rmSync(temporaryPath, { force: true });
+      }
       return true;
     } catch {
       return false;
@@ -1256,7 +1294,17 @@ export default function (pi: ExtensionAPI) {
     }
     for (const name of names) {
       const seq = Number(name);
-      if (!Number.isInteger(seq) || unreadSeqs.has(seq)) continue;
+      if (!Number.isInteger(seq)) {
+        // An abandoned atomic-write temp: its marker was never published, so
+        // reclaim it here while the lock is held.
+        try {
+          rmSync(join(deliveredMarkerDir, name), { force: true });
+        } catch {
+          // Best effort; an empty temp only inflates the ledger directory.
+        }
+        continue;
+      }
+      if (unreadSeqs.has(seq)) continue;
       try {
         rmSync(deliveredMarkerPath(seq), { force: true });
       } catch {
@@ -1316,7 +1364,14 @@ export default function (pi: ExtensionAPI) {
     }
     if (!sessionFlushed(currentMainSession)) return { ok: false, durable: false, deliveryId: null, appended: false };
     if (!generationOwnsLockSync(expectedGeneration)) {
-      rollbackDeliveryEntry(row.seq, currentMainSession.getSessionFile(), customType, deliveryId);
+      // A superseded owner that still holds only its own uncommitted
+      // reservation never owned the delivery: force its record out so the
+      // unread row is redelivered by the lock owner. Every other case keeps the
+      // conservative rollback, because the record may be the only durable copy
+      // of a note a replacement already adopted and read.
+      const marker = readReservation(row.seq);
+      const supersededPending = marker?.status === "reserved" && marker.deliveryId === deliveryId;
+      rollbackDeliveryEntry(row.seq, currentMainSession.getSessionFile(), customType, deliveryId, supersededPending);
       // The append was flushed, so one durable record for the sequence always
       // remains: either ours (kept because it is the only copy) or a sibling
       // that replaced it. Name the marker with that survivor.
