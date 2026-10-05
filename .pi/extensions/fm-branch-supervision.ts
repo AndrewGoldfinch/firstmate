@@ -186,10 +186,16 @@ const MIRROR_MESSAGE_CAP = 4000;
 const MERGE_NOTE_BOAT = "⛵";
 const VISIBLE_OUTCOME_ANCHOR = "⚓";
 const VISIBLE_OUTCOME_ENTRY_TYPE = "fm-branch-visible-outcome";
-// The custom type of a routine merge note. Pi stores a sent custom message as a
-// `custom_message` session entry, so this type names both the presentation
-// target and, with the embedded store sequence, the durable delivery identity.
+// The custom type of a routine merge note on the default (non-durable)
+// presentation path. Pi stores a sent custom message as a `custom_message`
+// session entry.
 const ROUTINE_NOTE_ENTRY_TYPE = "fm-branch-merge";
+// The durable delivery record for a routine note under the opt-in identity.
+// Unlike a `custom_message` sent with deliverAs "nextTurn" - which Pi only
+// queues in memory until the next prompt flushes it - a custom entry appended
+// through appendEntry is persisted and rendered synchronously, so the note is
+// durable before mark-read can cross it.
+const VISIBLE_ROUTINE_ENTRY_TYPE = "fm-branch-visible-routine";
 // The processing half of the captain-outcome contract. The visible entry
 // above is the DISPLAY: crash-safe and exact-once. This hidden, typed request
 // is the PROCESSING: it opens the one turn in which main acts on the outcome,
@@ -1037,32 +1043,48 @@ export default function (pi: ExtensionAPI) {
     });
   }
 
+  // The default presentation path, unchanged: a plain custom message with no
+  // sequence-keyed record, so a failed cursor write re-presents it. The opt-in
+  // durable identity uses ensureRoutineOutcome and a synchronous entry instead.
   function deliverRoutineOutcome(row: OutcomeRow): void {
     const message = {
       customType: ROUTINE_NOTE_ENTRY_TYPE,
       content: `${MERGE_NOTE_BOAT} ${row.task}: ${row.summary}`,
       display: !row.silent,
-      details: durableDeliveryEnabled ? ({ version: 1, ...row } as RoutineDeliveryRecord) : undefined,
+      details: undefined,
     };
     if (mainStreaming) pi.sendMessage(message, { deliverAs: "nextTurn" });
     else pi.sendMessage(message, {});
   }
 
-  // Routine counterpart of ensureVisibleCaptainOutcome. The stored custom
-  // message is its own record, so a reload after delivery and before mark-read
-  // finds it by store sequence and delivers nothing again. A conflicting record
-  // for one sequence fails closed. Return true once delivery is recorded.
+  // Routine counterpart of ensureVisibleCaptainOutcome. The record is a custom
+  // entry appended synchronously, exactly like a captain outcome, so it is
+  // durable and rendered before mark-read can cross it: a reload after delivery
+  // and before mark-read finds it by store sequence and delivers nothing
+  // again. A conflicting record for one sequence fails closed. Return true only
+  // once the delivery is recorded in the session.
   function ensureRoutineOutcome(row: OutcomeRow): boolean {
     if (!currentMainSession || row.verdict !== "routine") return false;
+    let matching = false;
     for (const entry of currentMainSession.getEntries()) {
-      if (entry.type !== "custom_message" || entry.customType !== ROUTINE_NOTE_ENTRY_TYPE) continue;
-      const recorded = parseRoutineDeliveryRecord(entry.details);
+      if (entry.type !== "custom" || entry.customType !== VISIBLE_ROUTINE_ENTRY_TYPE) continue;
+      const recorded = parseRoutineDeliveryRecord(entry.data);
       if (!recorded || recorded.seq !== row.seq) continue;
       if (!sameOutcome(recorded, row)) return false;
-      return true;
+      matching = true;
     }
-    deliverRoutineOutcome(row);
-    return true;
+    if (matching) return true;
+    const record: RoutineDeliveryRecord = { version: 1, ...row };
+    try {
+      pi.appendEntry(VISIBLE_ROUTINE_ENTRY_TYPE, record);
+    } catch {
+      return false;
+    }
+    return currentMainSession.getEntries().some((entry) => {
+      if (entry.type !== "custom" || entry.customType !== VISIBLE_ROUTINE_ENTRY_TYPE) return false;
+      const recorded = parseRoutineDeliveryRecord(entry.data);
+      return recorded !== null && sameOutcome(recorded, row);
+    });
   }
 
   // Captain rows that are read (their visible entry exists) but not yet
@@ -2503,6 +2525,20 @@ ${context.command}
     if (!record || record.verdict !== "captain") return undefined;
     return new Text(
       `${theme.fg("customMessageText", VISIBLE_OUTCOME_ANCHOR)}${theme.fg("dim", ` [seq ${record.seq}] ${record.task}: ${record.summary}`)}`,
+      1,
+      0,
+    );
+  });
+
+  // The opt-in durable routine delivery is a transcript entry too, so it is
+  // persisted and rendered synchronously and never depends on Pi's deferred
+  // nextTurn write. A silent routine outcome records its identity without
+  // rendering.
+  pi.registerEntryRenderer?.(VISIBLE_ROUTINE_ENTRY_TYPE, (entry, _options, theme) => {
+    const record = parseRoutineDeliveryRecord(entry.data);
+    if (!record || record.verdict !== "routine" || record.silent) return undefined;
+    return new Text(
+      `${theme.fg("customMessageText", MERGE_NOTE_BOAT)}${theme.fg("dim", ` ${record.task}: ${record.summary}`)}`,
       1,
       0,
     );

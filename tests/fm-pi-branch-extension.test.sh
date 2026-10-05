@@ -560,12 +560,19 @@ const renderers = new Map();
 const entryRenderers = new Map();
 const markdownTransformers = [];
 const mainEntries = [];
+// Pi's in-memory next-turn queue: a deliverAs "nextTurn" message waits here
+// until the next prompt flush persists it as a `custom_message` entry.
+const pendingNextTurnMessages = [];
 const mainSessionManager = {
   getSessionFile: () => `${home}/main.jsonl`,
   getEntries: () => mainEntries,
 };
 const defaultSessionCtx = { model: mainModel, modelRegistry, sessionManager: mainSessionManager };
 let activeMainSession = mainSessionManager;
+function flushPendingNextTurn() {
+  const queued = pendingNextTurnMessages.splice(0, pendingNextTurnMessages.length);
+  for (const entry of queued) activeMainSession.getEntries().push(entry);
+}
 const pi = {
   events: bus,
   on(event, handler) {
@@ -592,17 +599,22 @@ const pi = {
   sendMessage(message, options) {
     sentToMain.push({ message, options: options ?? {} });
     // Pi stores a sent custom message as a `custom_message` session entry, which
-    // is what makes a durable routine delivery recognizable on reload. Record
-    // only notes that carry a durable identity so the scripted entry lists the
-    // other tests rely on stay unchanged.
+    // is what makes a durable routine delivery recognizable on reload. Only
+    // notes that carry a durable identity are recorded, so the scripted entry
+    // lists the other tests rely on stay unchanged. A deliverAs "nextTurn" copy
+    // is only queued in memory: Pi appends that entry when the next prompt
+    // flushes the queue, not when sendMessage returns, so a reconcile that runs
+    // mid-stream cannot observe it.
     if (message && typeof message === "object" && message.details !== undefined) {
-      activeMainSession.getEntries().push({
+      const entry = {
         type: "custom_message",
         customType: message.customType,
         content: message.content,
         details: message.details,
         display: message.display,
-      });
+      };
+      if ((options ?? {}).deliverAs === "nextTurn") pendingNextTurnMessages.push(entry);
+      else activeMainSession.getEntries().push(entry);
     }
   },
   sendUserMessage(content, options) {
@@ -5987,19 +5999,28 @@ SH
       FM_PI_DURABLE_DELIVERY="$flag" DRIVER_PRELUDE="$DRIVER_PRELUDE" \
       node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
 const prelude = process.env.DRIVER_PRELUDE;
-await eval(`(async () => { ${prelude}; globalThis.__t = { fire, outcomeScript, sentToMain, defaultSessionCtx }; })()`);
-const { fire, outcomeScript, sentToMain, defaultSessionCtx } = globalThis.__t;
+await eval(`(async () => { ${prelude}; globalThis.__t = { fire, outcomeScript, sentToMain, mainEntries, defaultSessionCtx }; })()`);
+const { fire, outcomeScript, sentToMain, mainEntries, defaultSessionCtx } = globalThis.__t;
 import { writeFileSync } from "node:fs";
 
 const failArm = process.env.FM_TEST_FAIL_ARM;
 const expectCopies = Number(process.env.FM_TEST_EXPECT_COPIES);
 const armStoreFailure = (subcommand) => writeFileSync(failArm, subcommand);
 const storedRows = () => outcomeScript(["list", "--recent", "50"]).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+// The externally visible delivery, whichever representation the selected arm
+// uses: a deferred custom message on the existing path, a synchronous durable
+// entry under the durable identity.
 const routineCopies = (summary) => sentToMain.filter(
   (sent) => sent.message.customType === "fm-branch-merge" && sent.message.content.includes(summary),
+).length + mainEntries.filter(
+  (entry) => entry.type === "custom" && entry.customType === "fm-branch-visible-routine"
+    && entry.data && entry.data.summary === summary,
 ).length;
 
 await fire("session_start", {}, defaultSessionCtx);
+// Main's turn is streaming: the F09 arm runs in the window where a nextTurn
+// delivery is only queued in memory.
+await fire("agent_start", {});
 const summary = "durable delivery identity note under a failed cursor write";
 outcomeScript(["append", "--task", "fleet", "--verdict", "routine", "--summary", summary]);
 if (storedRows().length !== 1) throw new Error("the durable commit did not record exactly one routine row");
@@ -6061,17 +6082,21 @@ SH
     FM_TEST_FAIL_ARM="$home/state/f09-replay-fail-arm" FM_PI_DURABLE_DELIVERY="1" DRIVER_PRELUDE="$DRIVER_PRELUDE" \
     node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
 const prelude = process.env.DRIVER_PRELUDE;
-await eval(`(async () => { ${prelude}; globalThis.__t = { fire, outcomeScript, sentToMain, defaultSessionCtx }; })()`);
-const { fire, outcomeScript, sentToMain, defaultSessionCtx } = globalThis.__t;
+await eval(`(async () => { ${prelude}; globalThis.__t = { fire, outcomeScript, sentToMain, mainEntries, defaultSessionCtx }; })()`);
+const { fire, outcomeScript, sentToMain, mainEntries, defaultSessionCtx } = globalThis.__t;
 import { writeFileSync } from "node:fs";
 
 const failArm = process.env.FM_TEST_FAIL_ARM;
 const armStoreFailure = (subcommand) => writeFileSync(failArm, subcommand);
 const routineCopies = (summary) => sentToMain.filter(
   (sent) => sent.message.customType === "fm-branch-merge" && sent.message.content.includes(summary),
+).length + mainEntries.filter(
+  (entry) => entry.type === "custom" && entry.customType === "fm-branch-visible-routine"
+    && entry.data && entry.data.summary === summary,
 ).length;
 
 await fire("session_start", {}, defaultSessionCtx);
+await fire("agent_start", {});
 const first = "durable note whose ack never persists";
 outcomeScript(["append", "--task", "fleet", "--verdict", "routine", "--summary", first]);
 
@@ -6115,6 +6140,132 @@ EOF
   out=$(cat "$TMP_ROOT/node-output")
   expect_code 0 "$status" "the durable boundary must survive replay and takeover with exactly one delivery: $out"
   pass "durable delivery identity keeps one delivery across repeated ack failure, replay, and takeover, and separates sequences"
+}
+
+# The streaming half of the documented F09 window. Every reconcile here runs
+# while main's turn is streaming, which is exactly when a deliverAs "nextTurn"
+# copy lives only in Pi's in-memory queue. The durable record is a synchronous
+# entry appended before mark-read, so delivery stays exactly once across a failed
+# ack, a deferred-queue flush, and a genuinely new main session, and no note is
+# lost or silently dropped.
+test_f09_durable_delivery_identity_streaming_neither_duplicates_nor_loses() {
+  local repo home fakebin out status real_bash
+  repo="$TMP_ROOT/f09-durable-streaming-root"
+  home="$TMP_ROOT/f09-durable-streaming-home"
+  fakebin="$home/fakebin"
+  real_bash=$(command -v bash)
+  mkdir -p "$home/state" "$home/config" "$fakebin"
+  install_pi_branch_extension_fixture "$repo"
+  cat > "$fakebin/bash" <<'SH'
+#!/bin/sh
+armed=$(cat "$FM_TEST_FAIL_ARM" 2>/dev/null || printf '')
+if [ -n "$armed" ] && [ "$1" = "$FM_TEST_OUTCOME_SCRIPT" ] && [ "$2" = "$armed" ]; then
+  : > "$FM_TEST_FAIL_ARM"
+  echo "injected cursor-write failure" >&2
+  exit 9
+fi
+exec "$FM_TEST_REAL_BASH" "$@"
+SH
+  chmod +x "$fakebin/bash"
+  PATH="$fakebin:$PATH" PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_TEST_REAL_BASH="$real_bash" FM_TEST_OUTCOME_SCRIPT="$ROOT/bin/fm-branch-outcome.sh" \
+    FM_TEST_FAIL_ARM="$home/state/f09-streaming-fail-arm" FM_PI_DURABLE_DELIVERY="1" DRIVER_PRELUDE="$DRIVER_PRELUDE" \
+    node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
+const prelude = process.env.DRIVER_PRELUDE;
+await eval(`(async () => { ${prelude}; globalThis.__t = { fire, outcomeScript, sentToMain, mainEntries, pendingNextTurnMessages, flushPendingNextTurn, defaultSessionCtx, home }; })()`);
+const { fire, outcomeScript, sentToMain, mainEntries, pendingNextTurnMessages, flushPendingNextTurn, defaultSessionCtx, home } = globalThis.__t;
+import { writeFileSync } from "node:fs";
+
+const failArm = process.env.FM_TEST_FAIL_ARM;
+const armStoreFailure = (subcommand) => writeFileSync(failArm, subcommand);
+const durableCopies = (entries, summary) => entries.filter(
+  (entry) => entry.type === "custom" && entry.customType === "fm-branch-visible-routine"
+    && entry.data && entry.data.summary === summary,
+).length;
+const routineMessages = (summary) => sentToMain.filter(
+  (sent) => sent.message.customType === "fm-branch-merge" && sent.message.content.includes(summary),
+).length;
+
+await fire("session_start", {}, defaultSessionCtx);
+// Main's turn is streaming for the whole scenario.
+await fire("agent_start", {});
+
+const summary = "streaming durable note";
+outcomeScript(["append", "--task", "fleet", "--verdict", "routine", "--summary", summary]);
+
+// Delivery succeeds; the cursor write then fails.
+armStoreFailure("mark-read");
+await fire("turn_end", {}, defaultSessionCtx);
+if (durableCopies(mainEntries, summary) !== 1) {
+  throw new Error(`streaming delivery was not exactly once: ${durableCopies(mainEntries, summary)}`);
+}
+if (routineMessages(summary) !== 0) throw new Error("the durable path used the deferred message queue");
+if (pendingNextTurnMessages.length !== 0) throw new Error("a message was left queued in memory");
+if (outcomeScript(["unread"]) === "") throw new Error("the armed cursor failure still advanced the cursor");
+
+// Replay while the row stays unread: the durable entry is found by sequence.
+armStoreFailure("mark-read");
+await fire("turn_end", {}, defaultSessionCtx);
+if (durableCopies(mainEntries, summary) !== 1) {
+  throw new Error(`replay duplicated the streaming note: ${durableCopies(mainEntries, summary)}`);
+}
+
+// A crash after the successful ack but before Pi would have flushed a queued
+// nextTurn copy loses nothing: there was no queued copy, the delivery was
+// already a persisted entry. Flushing proves the queue held nothing.
+flushPendingNextTurn();
+if (durableCopies(mainEntries, summary) !== 1) {
+  throw new Error("flushing the deferred queue changed the delivery count");
+}
+
+// Recovered: the cursor write persists and the row leaves the unread set.
+armStoreFailure("");
+await fire("turn_end", {}, defaultSessionCtx);
+if (durableCopies(mainEntries, summary) !== 1) {
+  throw new Error(`recovery changed the streaming delivery count: ${durableCopies(mainEntries, summary)}`);
+}
+if (outcomeScript(["unread"]) !== "") throw new Error("recovery did not advance the cursor past the streaming note");
+await fire("agent_end", {});
+
+// A genuinely new main session (/new) is a fresh, empty session file. An
+// acknowledged note is not re-presented there: the home-wide cursor already
+// records that it was delivered, and nothing is lost because it was delivered.
+const newEntries = [];
+const newSession = {
+  model: defaultSessionCtx.model,
+  modelRegistry: defaultSessionCtx.modelRegistry,
+  sessionManager: { getSessionFile: () => `${home}/main-new.jsonl`, getEntries: () => newEntries },
+};
+await fire("session_start", {}, newSession);
+await fire("agent_start", {});
+await fire("turn_end", {}, newSession);
+if (durableCopies(newEntries, summary) !== 0) {
+  throw new Error(`a new session re-presented an already acknowledged note: ${durableCopies(newEntries, summary)}`);
+}
+
+// The recoverable direction: a row whose cursor write never persisted
+// re-presents in the new session, so losing the old session cannot silently
+// drop it.
+const unreadSummary = "streaming note recoverable across a new session";
+outcomeScript(["append", "--task", "fleet", "--verdict", "routine", "--summary", unreadSummary]);
+armStoreFailure("mark-read");
+await fire("turn_end", {}, newSession);
+if (durableCopies(newEntries, unreadSummary) !== 1) {
+  throw new Error(`the unread note was not re-presented in the new session: ${durableCopies(newEntries, unreadSummary)}`);
+}
+if (outcomeScript(["unread"]) === "") throw new Error("the armed cursor failure still advanced the unread row");
+armStoreFailure("");
+await fire("turn_end", {}, newSession);
+if (durableCopies(newEntries, unreadSummary) !== 1) {
+  throw new Error(`recovery changed the new-session delivery count: ${durableCopies(newEntries, unreadSummary)}`);
+}
+if (outcomeScript(["unread"]) !== "") throw new Error("recovery did not advance the cursor past the new-session row");
+process.exit(0);
+EOF
+  status=$?
+  out=$(cat "$TMP_ROOT/node-output")
+  expect_code 0 "$status" "the streaming durable arm must neither duplicate nor lose a note: $out"
+  pass "streaming durable delivery stays exactly once across a failed ack, a queue flush, and a new session"
 }
 
 test_extension_registered_provider_resolves_in_the_branch() {
@@ -6301,4 +6452,5 @@ test_mark_read_failure_keeps_routine_redelivery_and_captain_deduplication
 test_f09_durable_committed_routine_row_is_re_presented_across_cursor_failure
 test_f09_durable_delivery_identity_makes_routine_notes_exactly_once
 test_f09_durable_delivery_identity_survives_replay_and_takeover
+test_f09_durable_delivery_identity_streaming_neither_duplicates_nor_loses
 test_durable_provider_selection_routes_through_the_bridge
