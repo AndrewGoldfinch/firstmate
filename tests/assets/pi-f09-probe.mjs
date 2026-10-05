@@ -50,6 +50,29 @@ async function worker() {
       throw error;
     }
   };
+  // Marker writes (the home-wide reservation ledger) are intercepted at the
+  // same filesystem boundary: pause-before-marker-write forces a takeover
+  // between reclaim's compare and its publish, and crash-on-marker-write
+  // crashes inside the write so reconciliation must recover the note.
+  const markerDir = join(home, "state/.branch-outcomes-delivered");
+  let pauseBeforeMarkerWrite = false;
+  let crashOnMarkerWrite = false;
+  const writeFile = fs.writeFileSync;
+  fs.writeFileSync = function (path, ...args) {
+    if (typeof path === "string" && path.startsWith(markerDir)) {
+      if (pauseBeforeMarkerWrite) {
+        pauseBeforeMarkerWrite = false;
+        process.kill(process.pid, "SIGSTOP");
+      } else if (crashOnMarkerWrite) {
+        crashOnMarkerWrite = false;
+        // Reproduce a crash between creating the file and writing its bytes:
+        // leave an empty marker (direct write) or an empty temp (atomic write).
+        try { writeFile(path, ""); } catch {}
+        process.kill(process.pid, "SIGKILL");
+      }
+    }
+    return writeFile(path, ...args);
+  };
   syncBuiltinESMExports();
   globalThis.fetch = async () => { throw new Error("network is forbidden in the F09 probe"); };
   const { DefaultResourceLoader, InteractiveMode, SessionManager, SettingsManager,
@@ -92,6 +115,8 @@ async function worker() {
         message: { role: "assistant", content: [] }, toolResults: [] });
       else if (command === "pause-before-write") pauseBeforeWrite = true;
       else if (command === "pause-after-write") pauseAfterWrite = true;
+      else if (command === "pause-before-marker-write") pauseBeforeMarkerWrite = true;
+      else if (command === "crash-on-marker-write") crashOnMarkerWrite = true;
       else if (command === "converse") manager.appendMessage({ role: "user", content: "Local fixture conversation", timestamp: Date.now() });
       else assert.equal(command, "snapshot");
       process.send({ id, snapshot: snapshot() });
@@ -426,11 +451,14 @@ exec "$FM_F09_BASH" "$@"
       first.child.kill("SIGCONT");
       const stale = observe(home, "old-owner-resumes-after-replacement", await blocked);
       assert.notEqual(stale.pid, stale.lockPid);
-      // The stopped owner's own record is the only durable copy and survives the
-      // resume; the home keeps exactly one recorded delivery.
-      assert.equal(stale.diskRecords, 1);
+      // The superseded owner must not keep an appended or rendered record
+      // after the successor took over: it rolls its own durable entry back out
+      // of the session model and disk and releases the reservation, leaving
+      // the row unread for the lock owner to deliver.
+      assert.equal(stale.memoryRecords, 0, "a superseded owner must not append or render a record after takeover");
+      assert.equal(stale.diskRecords, 0, "a superseded owner must not leave a durable record after takeover");
       assert.equal(stale.unread, 1);
-      assert.equal(stale.deliveryMarkers, 1);
+      assert.equal(stale.deliveryMarkers, 0, "a superseded owner must release its reservation");
       await kill(first);
       await kill(second);
       // Reopen the same destination to adopt the durable record and finish.
@@ -554,10 +582,75 @@ exec "$FM_F09_BASH" "$@"
       assert.equal(reclaimed.deliveryMarkers, 0, "a marker leaked after a successful read is reclaimed");
       await kill(second);
     }
+    {
+      const home = setup("reclaim-interleave");
+      const markerDir = join(home, "state/.branch-outcomes-delivered");
+      fs.mkdirSync(markerDir, { recursive: true });
+      // A reservation left by a dead owner: reclaimable, and the row unread.
+      fs.writeFileSync(join(markerDir, "1"), JSON.stringify({
+        version: 2, status: "reserved", owner: "999999", generation: 1,
+        destination: join(home, "sessions", "main.jsonl"), deliveryId: "stale-owner-record",
+      }));
+      const first = await launch(home);
+      grant(home, first);
+      await first.request("pause-before-marker-write");
+      const blocked = first.request("start");
+      blocked.catch(() => {});
+      // The first reclaimer is stopped between its compare and its publish.
+      let stopped = false;
+      for (let i = 0; i < 300; i++) {
+        const status = execFileSync("ps", ["-o", "stat=", "-p", String(first.child.pid)], { encoding: "utf8" });
+        if (status.trim().startsWith("T")) { stopped = true; break; }
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      assert.ok(stopped, "the reclaimer must stop between the compare and the publish");
+      // A successor takes the lock and reclaims the same stale reservation.
+      const second = await launch(home, { destination: "replacement" });
+      grant(home, second);
+      failAck(home);
+      const winner = observe(home, "successor-reclaims-first", await second.request("start"));
+      assert.equal(winner.diskRecords, 1, "the successor must reclaim and deliver exactly once");
+      assert.equal(winner.unread, 1);
+      assert.equal(winner.deliveryMarkers, 1);
+      const winnerMarker = JSON.parse(fs.readFileSync(join(markerDir, "1"), "utf8"));
+      assert.equal(winnerMarker.status, "committed");
+      assert.equal(winnerMarker.owner, String(second.child.pid), "the marker must still name the winner");
+      // The first reclaimer resumes after the takeover and must not clobber the
+      // winner or leave a second record.
+      first.child.kill("SIGCONT");
+      const clobbered = observe(home, "first-reclaimer-resumes", await blocked);
+      assert.equal(clobbered.diskRecords, 1, "a resumed reclaimer must not leave two winners");
+      assert.equal(clobbered.unread, 1);
+      assert.equal(clobbered.deliveryMarkers, 1);
+      const settledMarker = JSON.parse(fs.readFileSync(join(markerDir, "1"), "utf8"));
+      assert.equal(settledMarker.status, "committed");
+      assert.equal(settledMarker.owner, String(second.child.pid), "a resumed reclaimer must not clobber the winner");
+      await kill(first);
+      await kill(second);
+    }
+    {
+      const home = setup("marker-write-crash");
+      const first = await launch(home);
+      grant(home, first);
+      await first.request("crash-on-marker-write");
+      const exited = once(first.child, "exit");
+      first.request("start").catch(() => {});
+      const [, signal] = await exited;
+      assert.equal(signal, "SIGKILL", "the crash must land inside the marker write");
+      // A crash inside the reservation write must not strand the note: a fresh
+      // owner reconciles and delivers exactly one committed note.
+      const second = await launch(home);
+      grant(home, second);
+      const recovered = observe(home, "recovered-after-marker-crash", await second.request("start"));
+      assert.equal(recovered.diskRecords, 1, "a marker-write crash must not strand the note");
+      assert.equal(recovered.unread, 0);
+      assert.equal(recovered.deliveryMarkers, 0);
+      await kill(second);
+    }
     report.verdict = "PASS";
     save();
     for (const row of observations.filter((row) => row.scenario)) console.log(JSON.stringify(row));
-    console.log("F09_PROBE_COMPLETE verdict=PASS; one committed note is one home-wide delivery across restart, destination replacement, stale-owner takeover, adoption before commit, and a double-destination append race");
+    console.log("F09_PROBE_COMPLETE verdict=PASS; one committed note is one home-wide delivery across restart, destination replacement, stale-owner takeover, adoption before commit, a double-destination append race, an interleaved reclaim, and a marker-write crash");
   } catch (error) {
     report.verdict = "PROBE_FAILED";
     report.error = error.stack;
