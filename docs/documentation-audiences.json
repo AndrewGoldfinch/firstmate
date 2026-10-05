@@ -481,6 +481,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/23-hardening-verify.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
