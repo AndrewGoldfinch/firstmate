@@ -6,6 +6,11 @@
  * named barriers around persistence and effect boundaries. The runner never
  * repairs an implementation, adds retries, deduplicates effects, or synthesizes
  * outcomes.
+ *
+ * The external effect under test is an externally visible note delivery. For
+ * arm A a delivery is a presentation from the store's unread rows; for arm B a
+ * delivery is a new outcome row the durable sink commits. Both are recorded at
+ * the boundary where the note becomes visible, never from a replay flag.
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -16,10 +21,10 @@ import { fauxAssistantMessage, fauxProvider, type MutableModels } from "@earendi
 import { DurableSidecar } from "../src/service.ts";
 import { runDurableDispatch } from "../src/bridge.ts";
 import { SidecarClient } from "../src/sidecar-client.ts";
-import type { CandidateResult } from "../src/bridge.ts";
+import { BridgeError, type CandidateResult } from "../src/bridge.ts";
 import { EffectLedger } from "./effects.ts";
 import type { FleetTask } from "./fleet.ts";
-import type { OperationRecordView, OutcomeRecord, Trace } from "./grader.ts";
+import type { Delivery, OperationRecordView, OutcomeRecord, StaleOwnerAttempt, Trace } from "./grader.ts";
 
 export class SimulatedCrash extends Error {
   readonly barrier: string;
@@ -64,6 +69,16 @@ async function readOutcomeStore(scriptPath: string, env: NodeJS.ProcessEnv): Pro
   return outcomeRecords(out);
 }
 
+/** Run one outcome-store subcommand synchronously. */
+function runOutcomeSync(scriptPath: string, env: NodeJS.ProcessEnv, args: readonly string[]): string {
+  return execFileSync("bash", [scriptPath, ...args], { env, encoding: "utf8" });
+}
+
+/** Read the store's unread rows exactly as the branch reconciliation does. */
+function readUnreadOutcomes(scriptPath: string, env: NodeJS.ProcessEnv): OutcomeRecord[] {
+  return outcomeRecords(runOutcomeSync(scriptPath, env, ["unread"]));
+}
+
 export type DurableScenarioInput = {
   home: string;
   scenario: string;
@@ -77,6 +92,12 @@ export type DurableScenarioInput = {
    * effect is acknowledged, so the retry must replay without a second effect.
    */
   crashAfterSettleTask?: string;
+  /**
+   * Task whose superseded owner attempts an append after a genuine owner
+   * replacement. The current authority must refuse it, which makes the
+   * zero-stale-owner clause non-vacuous.
+   */
+  staleOwnerAfterSettleTask?: string;
 };
 
 /** Run one scenario through the durable arm. */
@@ -84,14 +105,17 @@ export async function runDurableScenario(input: DurableScenarioInput): Promise<A
   mkdirSync(join(input.home, "state"), { recursive: true });
   const respond = input.respond ?? truthfulResponder();
   const env = { ...process.env, FM_HOME: input.home };
-  const ledger = new EffectLedger();
   const faults: string[] = [];
   const notes: string[] = [];
+  const deliveries: Delivery[] = [];
+  const staleOwnerAttempts: StaleOwnerAttempt[] = [];
+  const observedRows = new Map<string, number>();
   let crashArmed = input.crashAt !== undefined;
 
   const faux = fauxProvider();
   const model = faux.models[0]!;
   const configure = (models: MutableModels) => models.setProvider(faux.provider);
+  let generation = 1;
 
   const startSidecar = () =>
     DurableSidecar.start({
@@ -105,49 +129,66 @@ export async function runDurableScenario(input: DurableScenarioInput): Promise<A
       },
     });
 
+  const ensureSupervisor = async (sidecar: DurableSidecar): Promise<void> => {
+    const ensured = await sidecarRequest(sidecar.socketPath, {
+      protocolVersion: 2,
+      homeId: sidecar.homeId,
+      op: "ensureSupervisor",
+      supervisorId: "pi-supervisor",
+      ownerGeneration: generation,
+      wakeClaimId: "claim-1",
+      rowIds: input.tasks.flatMap((task) => task.acceptedRows),
+      capabilityProfile: "supervision-observe-v1",
+      model: { provider: model.provider, modelId: model.id },
+      thinkingLevel: "high",
+      cwd: input.home,
+    });
+    if (!ensured.ok) throw new Error(`ensureSupervisor failed: ${ensured.error.code}`);
+  };
+
   let sidecar = await startSidecar();
-  const ensured = await sidecarRequest(sidecar.socketPath, {
-    protocolVersion: 2,
-    homeId: sidecar.homeId,
-    op: "ensureSupervisor",
-    supervisorId: "pi-supervisor",
-    ownerGeneration: 1,
-    wakeClaimId: "claim-1",
-    rowIds: input.tasks.flatMap((task) => task.acceptedRows),
-    capabilityProfile: "supervision-observe-v1",
-    model: { provider: model.provider, modelId: model.id },
-    thinkingLevel: "high",
-    cwd: input.home,
-  });
-  if (!ensured.ok) throw new Error(`ensureSupervisor failed: ${ensured.error.code}`);
+  await ensureSupervisor(sidecar);
+
+  // A delivery is a new outcome row observed through the store, so a durable
+  // sink that re-applied an effect while reporting a replay would still be seen.
+  const observeDeliveries = async (): Promise<void> => {
+    const rows = await readOutcomeStore(input.outcomeScript, env);
+    for (const task of input.tasks) {
+      const count = rows.filter((row) => row.task === task.id).length;
+      const prior = observedRows.get(task.id) ?? 0;
+      for (let index = prior; index < count; index += 1) deliveries.push({ note: task.id, owner: "branch" });
+      observedRows.set(task.id, count);
+    }
+  };
 
   const operationViews: OperationRecordView[] = [];
   for (const task of input.tasks) {
     const operationId = `fm:${input.home}:supervision:${task.id}:1`;
+    const candidate = respond(task);
     const transport = new SidecarClient({
       socketPath: sidecar.socketPath,
       homeId: sidecar.homeId,
       supervisorId: "pi-supervisor",
       capabilityProfile: "supervision-observe-v1",
-      ownerGeneration: 1,
+      ownerGeneration: generation,
       wakeClaimId: "claim-1",
       rowIds: task.acceptedRows,
       outcomeScript: input.outcomeScript,
     });
 
-    faux.setResponses([fauxAssistantMessage(JSON.stringify(respond(task)))]);
+    faux.setResponses([fauxAssistantMessage(JSON.stringify(candidate))]);
     let settled = false;
     try {
       const result = await runDurableDispatch(
         { transport },
         { operationId, prompt: `supervise ${task.id}`, payload: { task: task.id, rows: task.acceptedRows } },
       );
-      if (!result.replayed) ledger.apply(`outcome:${task.id}`, task.id, "branch");
       notes.push(`${task.id}: seq=${result.seq} replayed=${result.replayed}`);
+      await observeDeliveries();
       settled = true;
       if (input.crashAfterSettleTask === task.id) {
         faults.push(`pi-durable owner lost ${task.id} after settlement`);
-        notes.push(`${task.id}: settled; the retry must replay without a second effect`);
+        notes.push(`${task.id}: settled; the restarted owner must not deliver it twice`);
         settled = false;
       }
     } catch (error) {
@@ -155,17 +196,19 @@ export async function runDurableScenario(input: DurableScenarioInput): Promise<A
     }
 
     if (!settled && (input.crashAt || input.crashAfterSettleTask)) {
-      // Recover: reopen the owner on the same store and retry the same ID.
+      // Same-generation process restart: the logical owner is unchanged, so the
+      // settled operation is replayed rather than re-executed.
       await sidecar.stop();
       sidecar = await startSidecar();
-      faux.setResponses([fauxAssistantMessage(JSON.stringify(respond(task)))]);
+      await ensureSupervisor(sidecar);
+      faux.setResponses([fauxAssistantMessage(JSON.stringify(candidate))]);
       try {
-        const result = await runDurableDispatch(
+        const replayed = await runDurableDispatch(
           { transport },
           { operationId, prompt: `supervise ${task.id}`, payload: { task: task.id, rows: task.acceptedRows } },
         );
-        if (!result.replayed) ledger.apply(`outcome:${task.id}`, task.id, "branch");
-        notes.push(`${task.id}: recovered seq=${result.seq} replayed=${result.replayed}`);
+        notes.push(`${task.id}: recovered seq=${replayed.seq} replayed=${replayed.replayed}`);
+        await observeDeliveries();
       } catch (error) {
         notes.push(`${task.id}: unresolved after recovery (${error instanceof Error ? error.message : String(error)})`);
       }
@@ -188,6 +231,37 @@ export async function runDurableScenario(input: DurableScenarioInput): Promise<A
     }
   }
 
+  // Stale-owner check: a genuine owner replacement bumps the recorded
+  // generation, then the superseded owner attempts the append it could
+  // otherwise re-apply. The current authority must refuse it.
+  if (input.staleOwnerAfterSettleTask) {
+    const task = input.tasks.find((candidate) => candidate.id === input.staleOwnerAfterSettleTask);
+    if (task) {
+      const operationId = `fm:${input.home}:supervision:${task.id}:1`;
+      const staleTransport = new SidecarClient({
+        socketPath: sidecar.socketPath,
+        homeId: sidecar.homeId,
+        supervisorId: "pi-supervisor",
+        capabilityProfile: "supervision-observe-v1",
+        ownerGeneration: generation,
+        wakeClaimId: "claim-1",
+        rowIds: task.acceptedRows,
+        outcomeScript: input.outcomeScript,
+      });
+      generation += 1;
+      await ensureSupervisor(sidecar);
+      try {
+        await staleTransport.appendOutcome({ operationId, result: respond(task) });
+        staleOwnerAttempts.push({ note: task.id, owner: "generation-1", accepted: true, code: null });
+        notes.push(`${task.id}: STALE append was accepted after the owner replacement`);
+      } catch (error) {
+        const code = error instanceof BridgeError ? error.code : "error";
+        staleOwnerAttempts.push({ note: task.id, owner: "generation-1", accepted: false, code });
+        notes.push(`${task.id}: stale append refused (${code})`);
+      }
+    }
+  }
+
   await sidecar.stop();
 
   const outcomes = await readOutcomeStore(input.outcomeScript, env);
@@ -199,10 +273,16 @@ export async function runDurableScenario(input: DurableScenarioInput): Promise<A
     trace: {
       outcomes,
       operations: operationViews,
-      effects: [...ledger.all()],
+      effects: outcomes.map((outcome) => ({
+        effect: `outcome:${outcome.task}`,
+        operationId: outcome.task,
+        owner: "branch",
+        at: 0,
+      })),
+      deliveries,
       acknowledgements: [],
+      staleOwnerAttempts,
       acceptedRows: input.tasks.flatMap((task) => task.acceptedRows),
-      allowedOwners: ["branch"],
     },
   };
 }
@@ -216,11 +296,12 @@ export type ExistingScenarioInput = {
   /** Task whose in-process execution is interrupted before its outcome. */
   crashAtTask?: string;
   /**
-   * Task whose outcome is appended and then the owner is lost before the wake
-   * row is pruned, so the restarted owner re-claims and appends it again. The
-   * existing path has no operation key, so the append is not idempotent.
+   * Task whose routine note is delivered and then the cursor write fails, so
+   * the still-unread row is delivered a second time on the next
+   * reconciliation. This is the documented F09 limitation the benefit
+   * experiment targets.
    */
-  crashAfterEffectTask?: string;
+  deliverBeforeAckTask?: string;
 };
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -302,6 +383,7 @@ export async function runExistingScenario(input: ExistingScenarioInput): Promise
   const faults: string[] = [];
   const notes: string[] = [];
   const operations: OperationRecordView[] = [];
+  const deliveries: Delivery[] = [];
 
   for (const task of input.tasks) writeFileSync(join(stateDir, `${task.id}.meta`), "project=fleet\n");
   wakeAppend(
@@ -309,7 +391,7 @@ export async function runExistingScenario(input: ExistingScenarioInput): Promise
     input.tasks.map((task) => [task.id, task.planted] as const),
   );
 
-  let crashArmed = input.crashAtTask !== undefined || input.crashAfterEffectTask !== undefined;
+  let crashArmed = input.crashAtTask !== undefined;
   for (let round = 0; round < 2; round += 1) {
     const scope = wakeScope(input.home);
     if (scope.status !== "safe") break;
@@ -333,18 +415,33 @@ export async function runExistingScenario(input: ExistingScenarioInput): Promise
         state: "settled",
         receiptSeq: seq,
       });
-      if (crashArmed && taskId === input.crashAfterEffectTask) {
-        crashArmed = false;
-        crashed = true;
-        faults.push(`existing owner lost ${taskId} after its outcome was appended`);
-        notes.push(`${taskId}: effect applied, wake row left queued after the crash`);
-        break;
-      }
       if (round > 0) notes.push(`${task.id}: recovered on the restarted owner`);
       toPrune.push(task.id);
     }
     if (toPrune.length > 0) wakePrune(input.home, toPrune);
     if (!crashed) break;
+  }
+
+  // Deliver each routine note from the store's unread rows and advance the
+  // cursor after each, exactly as the branch's reconciliation does. A fault
+  // after a delivery but before its cursor write leaves the row unread, so a
+  // later reconciliation delivers the same logical note again.
+  const reconcile = (faultTask: string | undefined): void => {
+    const unread = readUnreadOutcomes(input.outcomeScript, env);
+    for (const row of unread) {
+      deliveries.push({ note: row.task, owner: "branch" });
+      if (faultTask !== undefined && row.task === faultTask) {
+        faults.push(`existing owner lost ${faultTask} after its routine note was delivered`);
+        notes.push(`${faultTask}: routine note delivered, cursor write failed, row still unread`);
+        return;
+      }
+      runOutcomeSync(input.outcomeScript, env, ["mark-read", "--through", String(row.seq)]);
+    }
+  };
+  reconcile(input.deliverBeforeAckTask);
+  if (input.deliverBeforeAckTask !== undefined) {
+    reconcile(undefined);
+    notes.push(`${input.deliverBeforeAckTask}: re-presented after recovery`);
   }
 
   const outcomes = await readOutcomeStore(input.outcomeScript, env);
@@ -357,11 +454,40 @@ export async function runExistingScenario(input: ExistingScenarioInput): Promise
       outcomes,
       operations,
       effects: [...ledger.all()],
+      deliveries,
       acknowledgements: [],
+      staleOwnerAttempts: [],
       acceptedRows: input.tasks.flatMap((task) => task.acceptedRows),
-      allowedOwners: ["branch"],
     },
   };
+}
+
+/**
+ * Causal control: the same logical note appended twice through the real store.
+ * With an operation key the append-or-return-existing keeps one row; without
+ * one the append is not idempotent and the failure is recreated. This is the
+ * dedup-disabled control, run directly against the store rather than inferred
+ * from either arm.
+ */
+export function runDedupCausalControl(
+  outcomeScript: string,
+  workDir: string,
+): { withOperationKey: number; withoutOperationKey: number } {
+  const append = (home: string, args: readonly string[]): void => {
+    mkdirSync(join(home, "state"), { recursive: true });
+    runOutcomeSync(outcomeScript, { ...process.env, FM_HOME: home }, args);
+  };
+  const base = ["--task", "C1", "--verdict", "routine", "--summary", "disposition=working; causal control"];
+  const keyed = join(workDir, "causal-keyed");
+  const unkeyed = join(workDir, "causal-unkeyed");
+  append(keyed, ["append", ...base, "--operation-key", "causal:key:1"]);
+  append(keyed, ["append", ...base, "--operation-key", "causal:key:1"]);
+  append(unkeyed, ["append", ...base]);
+  append(unkeyed, ["append", ...base]);
+  const count = (home: string): number =>
+    outcomeRecords(runOutcomeSync(outcomeScript, { ...process.env, FM_HOME: home }, ["list", "--recent", "200"]))
+      .length;
+  return { withOperationKey: count(keyed), withoutOperationKey: count(unkeyed) };
 }
 
 /** Minimal protocol request helper so the harness does not depend on test helpers. */

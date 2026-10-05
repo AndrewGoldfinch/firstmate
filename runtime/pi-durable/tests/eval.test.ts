@@ -60,18 +60,23 @@ test("the deterministic harness grades both arms and rejects every corrupted tra
   assert.equal(results.calibration.samples.length, 2);
   assert.ok(results.calibration.thresholds.recoveryTimeReductionPercent >= 30);
 
-  // Benefit validation: the post-effect fault must duplicate the existing
-  // path's non-idempotent append and must be replayed once by the durable sink,
-  // with recovery parity and no stale-owner action in either arm.
+  // Benefit validation: the delivery-before-ack fault must duplicate the
+  // existing path's routine-note delivery and must be replayed once by the
+  // durable sink, with recovery parity, a non-vacuous stale-owner refusal, and
+  // the dedup-disabled control recreating the failure.
   assert.equal(results.benefit.status, "pass");
   assert.equal(results.benefit.runs, 2);
   assert.ok(
-    results.benefit.duplicateOutcomes.existing.successes > 0,
-    "arm A must show a duplicate applied effect after the post-effect fault",
+    results.benefit.duplicateDeliveries.existing.successes > 0,
+    "arm A must show a duplicate externally visible delivery after the delivery-before-ack fault",
   );
-  assert.equal(results.benefit.duplicateOutcomes.durable.successes, 0, "arm B must replay without a duplicate effect");
+  assert.equal(results.benefit.duplicateDeliveries.durable.successes, 0, "arm B must replay without a duplicate delivery");
   assert.equal(results.benefit.promotionGate.recoveryParity, true);
-  assert.equal(results.benefit.promotionGate.zeroStaleOwnerActions, true);
+  assert.equal(results.benefit.promotionGate.durablePrevented, true);
+  assert.equal(results.benefit.promotionGate.staleOwnerVerified, true);
+  assert.ok(results.benefit.staleOwner.attempts > 0, "the stale-owner test must be non-vacuous");
+  assert.equal(results.benefit.staleOwner.accepted, 0);
+  assert.equal(results.benefit.promotionGate.causalControlRecreated, true);
   assert.equal(results.benefit.promotionGate.duplicateReduction, true);
   assert.equal(results.benefit.promotionGate.verdict, "advance");
 });

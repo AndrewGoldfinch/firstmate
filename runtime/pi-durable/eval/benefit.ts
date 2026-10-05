@@ -2,32 +2,35 @@
  * Benefit-validation experiments for the P2 prototype.
  *
  * The correctness harness answers "does it work". These experiments answer the
- * promotion question: does durable supervision reduce duplicate outcomes or
- * operator intervention under faulted workloads better than the existing path,
- * while keeping recovery parity and zero stale-owner actions.
+ * promotion question: does durable execution avoid duplicate externally visible
+ * note deliveries under a faulted workload better than the existing path, while
+ * keeping recovery parity, refusing a superseded owner, and preserving the
+ * causal role of operation-key deduplication.
  *
- * One paired loop collects all three measurements from the same runs:
+ * One paired loop collects all measurements from the same runs:
  *
- * 1. Duplicate-outcome avoidance. The fault lands after the effect is applied
- *    and before it is acknowledged. Arm A appends its outcome with no operation
- *    key, so the restarted owner re-appends it; arm B retries the same
- *    operation identity and the durable sink returns the existing row. Every
- *    applied effect is recorded in a non-idempotent ledger, so a duplicate is
- *    visible even when the arm reports success.
- * 2. Operator burden. The predeclared interventions are the human actions the
- *    arm's own automatic recovery still leaves behind: reconcile a duplicate
- *    applied effect, resubmit a task left without an outcome, and restart the
- *    owner. Automatic restart is not counted as an operator action.
- * 3. Recovery time. Faulted and healthy scenario wall-clock times at the
- *    predeclared run count, reported as medians with paired differences and the
- *    lab's own measured noise floor.
+ * 1. Duplicate-delivery avoidance. The fault lands after a routine note is
+ *    delivered and before its acknowledgement. On the existing path the row
+ *    stays unread, so the next reconciliation delivers the same logical note a
+ *    second time; the operation-keyed durable sink rejects the repeated
+ *    settlement, so it delivers the note once. Every delivery is recorded at
+ *    the delivery boundary in a non-idempotent ledger, never from a replay flag.
+ * 2. Stale-owner refusal. After a genuine owner replacement the superseded
+ *    owner attempts the append it could otherwise re-apply, so the
+ *    zero-stale-owner clause is non-vacuous rather than hardcoded to pass.
+ * 3. Causal control. The same logical note appended twice through the real
+ *    store keeps one row with an operation key and two rows without one, so the
+ *    failure is recreated when deduplication is disabled.
+ * 4. Recovery time. Faulted and healthy scenario wall-clock times at the
+ *    predeclared run count, reported as medians with the lab's own measured
+ *    noise floor and never part of the gate.
  */
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { FLEET } from "./fleet.ts";
 import { grade } from "./grader.ts";
-import { runDurableScenario, runExistingScenario, type ArmResult } from "./runner.ts";
+import { runDedupCausalControl, runDurableScenario, runExistingScenario, type ArmResult } from "./runner.ts";
 
 const DEFAULT_RUNS = 30;
 const RECOVERY_TIME_THRESHOLD_PERCENT = 30;
@@ -36,22 +39,20 @@ const FAULT_TASK = "T3";
 
 export type BenefitRun = {
   run: number;
-  existingDuplicateEffects: number;
-  durableDuplicateEffects: number;
-  existingDuplicateOutcomeTasks: number;
-  durableDuplicateOutcomeTasks: number;
-  existingInterventions: number;
-  durableInterventions: number;
-  existingCommands: number;
-  durableCommands: number;
+  existingDeliveries: number;
+  durableDeliveries: number;
+  existingDuplicateDeliveries: number;
+  durableDuplicateDeliveries: number;
   existingHealthyMs: number;
   durableHealthyMs: number;
   existingFaultedMs: number;
   durableFaultedMs: number;
   existingRecovered: boolean;
   durableRecovered: boolean;
-  existingStaleActions: number;
-  durableStaleActions: number;
+  existingStaleAttempts: number;
+  durableStaleAttempts: number;
+  existingStaleAccepted: number;
+  durableStaleAccepted: number;
 };
 
 export type Interval = { successes: number; total: number; rate: number; lower: number; upper: number };
@@ -63,11 +64,10 @@ export type BenefitResult = {
   predeclared: {
     scenario: string;
     fault: string;
-    interventions: string[];
     recoveryTimeThresholdPercent: number;
     healthyTolerancePercent: number;
   };
-  duplicateOutcomes: {
+  duplicateDeliveries: {
     existing: Interval;
     durable: Interval;
     existingTotal: number;
@@ -75,14 +75,8 @@ export type BenefitResult = {
     difference: { rate: number; lower: number; upper: number };
     verdict: "improved" | "parity" | "unproven";
   };
-  operatorBurden: {
-    existing: { interventions: number; commands: number; medianPerRun: number };
-    durable: { interventions: number; commands: number; medianPerRun: number };
-    existingRunsWithIntervention: Interval;
-    durableRunsWithIntervention: Interval;
-    difference: { rate: number; lower: number; upper: number };
-    verdict: "improved" | "parity" | "unproven";
-  };
+  staleOwner: { attempts: number; accepted: number; nonVacuous: boolean; verdict: "pass" | "fail" };
+  causalControl: { withOperationKey: number; withoutOperationKey: number; recreated: boolean };
   recoveryTime: {
     existingFaulted: { median: number; min: number; max: number };
     durableFaulted: { median: number; min: number; max: number };
@@ -92,12 +86,12 @@ export type BenefitResult = {
     medianReductionPercent: number;
     verdict: "improved" | "parity" | "unproven";
   };
-  staleOwnerActions: { existing: number; durable: number };
   promotionGate: {
     duplicateReduction: boolean;
-    operatorReduction: boolean;
+    durablePrevented: boolean;
+    staleOwnerVerified: boolean;
     recoveryParity: boolean;
-    zeroStaleOwnerActions: boolean;
+    causalControlRecreated: boolean;
     verdict: "advance" | "hold";
   };
   samples: BenefitRun[];
@@ -137,50 +131,15 @@ function difference(a: Interval, b: Interval): { rate: number; lower: number; up
   return { rate, lower, upper };
 }
 
-/** Applied effect occurrences beyond the first for the same logical operation. */
-function duplicateEffectCount(result: ArmResult): number {
+/** Deliveries beyond the first for the same logical note. */
+function duplicateDeliveryCount(result: ArmResult): number {
   const seen = new Map<string, number>();
-  for (const effect of result.trace.effects) {
-    const key = `${effect.operationId}:${effect.effect}`;
-    seen.set(key, (seen.get(key) ?? 0) + 1);
+  for (const delivery of result.trace.deliveries) {
+    seen.set(delivery.note, (seen.get(delivery.note) ?? 0) + 1);
   }
   let extra = 0;
   for (const count of seen.values()) extra += Math.max(0, count - 1);
   return extra;
-}
-
-function duplicateOutcomeTasks(result: ArmResult): number {
-  return FLEET.filter(
-    (task) => result.trace.outcomes.filter((outcome) => outcome.task === task.id).length > 1,
-  ).length;
-}
-
-/** Tasks accepted for the run that still have no outcome after recovery. */
-function lostOutcomeTasks(result: ArmResult): number {
-  return FLEET.filter((task) => result.trace.outcomes.every((outcome) => outcome.task !== task.id)).length;
-}
-
-function interventions(result: ArmResult): { reconcile: number; resubmit: number; restart: number } {
-  return {
-    reconcile: duplicateEffectCount(result),
-    resubmit: lostOutcomeTasks(result),
-    restart: 0,
-  };
-}
-
-function interventionCount(result: ArmResult): number {
-  const counts = interventions(result);
-  return counts.reconcile + counts.resubmit + counts.restart;
-}
-
-function staleOwnerActions(result: ArmResult): number {
-  const staleEffects = result.trace.effects.filter(
-    (effect) => !result.trace.allowedOwners.includes(effect.owner),
-  ).length;
-  const staleAcks = result.trace.acknowledgements.filter(
-    (ack) => !result.trace.allowedOwners.includes(ack.owner),
-  ).length;
-  return staleEffects + staleAcks;
 }
 
 function check(result: ArmResult, name: string): boolean {
@@ -210,74 +169,27 @@ export async function runBenefit(
   runs = Number.parseInt(process.env.FM_PI_DURABLE_BENEFIT_RUNS ?? "", 10) || DEFAULT_RUNS,
 ): Promise<BenefitResult> {
   const predeclared = {
-    scenario: `six-task fleet, fault after the effect on ${FAULT_TASK} and before acknowledgement`,
-    fault: `existing: crash after outcome append on ${FAULT_TASK}; pi-durable: crash after settlement on ${FAULT_TASK}`,
-    interventions: [
-      "restart-owner: restart the supervision owner (automatic in both arms, counted as zero operator actions)",
-      "reconcile-effect: reconcile one duplicate applied effect the append-only store cannot remove",
-      "resubmit-work: re-queue one accepted task left without an outcome",
-    ],
+    scenario: `six-task fleet, fault after the routine note on ${FAULT_TASK} is delivered and before its acknowledgement`,
+    fault: `existing: crash after the routine note on ${FAULT_TASK} is delivered, before its cursor write; pi-durable: owner lost after settlement on ${FAULT_TASK}`,
     recoveryTimeThresholdPercent: RECOVERY_TIME_THRESHOLD_PERCENT,
     healthyTolerancePercent: HEALTHY_TOLERANCE_PERCENT,
   };
+  const home = (name: string): string => {
+    const path = join(workDir, name);
+    mkdirSync(join(path, "state"), { recursive: true });
+    return path;
+  };
 
-  if (runs <= 0) {
-    return {
-      status: "not-covered",
-      reason: "benefit validation was skipped for this run",
-      runs: 0,
-      predeclared,
-      duplicateOutcomes: {
-        existing: wilson(0, 0),
-        durable: wilson(0, 0),
-        existingTotal: 0,
-        durableTotal: 0,
-        difference: { rate: 0, lower: 0, upper: 0 },
-        verdict: "unproven",
-      },
-      operatorBurden: {
-        existing: { interventions: 0, commands: 0, medianPerRun: 0 },
-        durable: { interventions: 0, commands: 0, medianPerRun: 0 },
-        existingRunsWithIntervention: wilson(0, 0),
-        durableRunsWithIntervention: wilson(0, 0),
-        difference: { rate: 0, lower: 0, upper: 0 },
-        verdict: "unproven",
-      },
-      recoveryTime: {
-        existingFaulted: { median: 0, min: 0, max: 0 },
-        durableFaulted: { median: 0, min: 0, max: 0 },
-        healthyWithinTolerance: true,
-        noiseFloorPercent: 0,
-        thresholdPercent: RECOVERY_TIME_THRESHOLD_PERCENT,
-        medianReductionPercent: 0,
-        verdict: "unproven",
-      },
-      staleOwnerActions: { existing: 0, durable: 0 },
-      promotionGate: {
-        duplicateReduction: false,
-        operatorReduction: false,
-        recoveryParity: false,
-        zeroStaleOwnerActions: true,
-        verdict: "hold",
-      },
-      samples: [],
-      limits: [
-        "benefit validation was skipped, so no evidence was collected for either arm",
-      ],
-    };
-  }
+  // The causal control runs once against the real store, independently of both
+  // arms: the dedup-disabled append must recreate the duplicate.
+  const causalControl = runDedupCausalControl(outcomeScript, workDir);
+  const causalRecreated = causalControl.withOperationKey === 1 && causalControl.withoutOperationKey > 1;
 
   const samples: BenefitRun[] = [];
-  for (let run = 1; run <= runs; run += 1) {
-    const home = (name: string) => {
-      const path = join(workDir, `benefit-${run}`, name);
-      mkdirSync(join(path, "state"), { recursive: true });
-      return path;
-    };
-
+  for (let run = 0; run < runs; run += 1) {
     const startedExistingHealthy = performance.now();
     const existingHealthy = await runExistingScenario({
-      home: home("existing-healthy"),
+      home: home(`run-${run}-existing-healthy`),
       scenario: "fleet",
       tasks: FLEET,
       outcomeScript,
@@ -286,7 +198,7 @@ export async function runBenefit(
 
     const startedDurableHealthy = performance.now();
     const durableHealthy = await runDurableScenario({
-      home: home("durable-healthy"),
+      home: home(`run-${run}-durable-healthy`),
       scenario: "fleet",
       tasks: FLEET,
       outcomeScript,
@@ -295,56 +207,49 @@ export async function runBenefit(
 
     const startedExistingFault = performance.now();
     const existingFaulted = await runExistingScenario({
-      home: home("existing-faulted"),
-      scenario: `fleet-fault-after-effect-${FAULT_TASK}`,
+      home: home(`run-${run}-existing-faulted`),
+      scenario: `fleet-deliver-before-ack-${FAULT_TASK}`,
       tasks: FLEET,
       outcomeScript,
-      crashAfterEffectTask: FAULT_TASK,
+      deliverBeforeAckTask: FAULT_TASK,
     });
     const existingFaultedMs = performance.now() - startedExistingFault;
 
     const startedDurableFault = performance.now();
     const durableFaulted = await runDurableScenario({
-      home: home("durable-faulted"),
-      scenario: `fleet-fault-after-settle-${FAULT_TASK}`,
+      home: home(`run-${run}-durable-faulted`),
+      scenario: `fleet-crash-after-settle-${FAULT_TASK}`,
       tasks: FLEET,
       outcomeScript,
       crashAfterSettleTask: FAULT_TASK,
+      staleOwnerAfterSettleTask: FAULT_TASK,
     });
     const durableFaultedMs = performance.now() - startedDurableFault;
 
     samples.push({
       run,
-      existingDuplicateEffects: duplicateEffectCount(existingFaulted),
-      durableDuplicateEffects: duplicateEffectCount(durableFaulted),
-      existingDuplicateOutcomeTasks: duplicateOutcomeTasks(existingFaulted),
-      durableDuplicateOutcomeTasks: duplicateOutcomeTasks(durableFaulted),
-      existingInterventions: interventionCount(existingFaulted),
-      durableInterventions: interventionCount(durableFaulted),
-      existingCommands: interventionCount(existingFaulted),
-      durableCommands: interventionCount(durableFaulted),
+      existingDeliveries: existingFaulted.trace.deliveries.length,
+      durableDeliveries: durableFaulted.trace.deliveries.length,
+      existingDuplicateDeliveries: duplicateDeliveryCount(existingFaulted),
+      durableDuplicateDeliveries: duplicateDeliveryCount(durableFaulted),
       existingHealthyMs,
       durableHealthyMs,
       existingFaultedMs,
       durableFaultedMs,
       existingRecovered: recovered(existingFaulted),
       durableRecovered: recovered(durableFaulted),
-      existingStaleActions: staleOwnerActions(existingFaulted),
-      durableStaleActions: staleOwnerActions(durableFaulted),
+      existingStaleAttempts: existingFaulted.trace.staleOwnerAttempts.length,
+      durableStaleAttempts: durableFaulted.trace.staleOwnerAttempts.length,
+      existingStaleAccepted: existingFaulted.trace.staleOwnerAttempts.filter((attempt) => attempt.accepted).length,
+      durableStaleAccepted: durableFaulted.trace.staleOwnerAttempts.filter((attempt) => attempt.accepted).length,
     });
   }
 
-  const existingDuplicateRuns = samples.filter((sample) => sample.existingDuplicateEffects > 0).length;
-  const durableDuplicateRuns = samples.filter((sample) => sample.durableDuplicateEffects > 0).length;
+  const existingDuplicateRuns = samples.filter((sample) => sample.existingDuplicateDeliveries > 0).length;
+  const durableDuplicateRuns = samples.filter((sample) => sample.durableDuplicateDeliveries > 0).length;
   const existingDuplicates = wilson(existingDuplicateRuns, samples.length);
   const durableDuplicates = wilson(durableDuplicateRuns, samples.length);
   const duplicateDifference = difference(existingDuplicates, durableDuplicates);
-
-  const existingInterventionRuns = samples.filter((sample) => sample.existingInterventions > 0).length;
-  const durableInterventionRuns = samples.filter((sample) => sample.durableInterventions > 0).length;
-  const existingInterventions = wilson(existingInterventionRuns, samples.length);
-  const durableInterventions = wilson(durableInterventionRuns, samples.length);
-  const interventionDifference = difference(existingInterventions, durableInterventions);
 
   const existingFaultedMs = samples.map((sample) => sample.existingFaultedMs);
   const durableFaultedMs = samples.map((sample) => sample.durableFaultedMs);
@@ -359,54 +264,46 @@ export async function runBenefit(
       : ((existingFaultedMedian - durableFaultedMedian) / existingFaultedMedian) * 100;
 
   const healthySpread =
-    median(healthyMs) === 0
-      ? 0
-      : (Math.max(...healthyMs) - Math.min(...healthyMs)) / median(healthyMs);
+    median(healthyMs) === 0 ? 0 : (Math.max(...healthyMs) - Math.min(...healthyMs)) / median(healthyMs);
   const healthyWithinTolerance = healthySpread * 100 <= HEALTHY_TOLERANCE_PERCENT;
 
-  const staleOwnerCount =
-    samples.reduce((total, sample) => total + sample.existingStaleActions + sample.durableStaleActions, 0);
+  const staleAttempts = samples.reduce(
+    (total, sample) => total + sample.existingStaleAttempts + sample.durableStaleAttempts,
+    0,
+  );
+  const staleAccepted = samples.reduce(
+    (total, sample) => total + sample.existingStaleAccepted + sample.durableStaleAccepted,
+    0,
+  );
   const recoveryParity = samples.every((sample) => sample.existingRecovered && sample.durableRecovered);
 
   const duplicateReduction = existingDuplicateRuns > 0 && duplicateDifference.lower > 0;
-  const operatorReduction = existingInterventionRuns > 0 && interventionDifference.lower > 0;
-  const zeroStaleOwnerActions = staleOwnerCount === 0;
-  const promotion = (duplicateReduction || operatorReduction) && recoveryParity && zeroStaleOwnerActions;
+  const durablePrevented = durableDuplicateRuns === 0;
+  const staleNonVacuous = staleAttempts > 0;
+  const staleOwnerVerified = staleNonVacuous && staleAccepted === 0;
+  const promotion =
+    duplicateReduction && durablePrevented && staleOwnerVerified && recoveryParity && causalRecreated;
 
   return {
     status: "pass",
     runs,
     predeclared,
-    duplicateOutcomes: {
+    duplicateDeliveries: {
       existing: existingDuplicates,
       durable: durableDuplicates,
-      existingTotal: samples.reduce((total, sample) => total + sample.existingDuplicateEffects, 0),
-      durableTotal: samples.reduce((total, sample) => total + sample.durableDuplicateEffects, 0),
+      existingTotal: samples.reduce((total, sample) => total + sample.existingDuplicateDeliveries, 0),
+      durableTotal: samples.reduce((total, sample) => total + sample.durableDuplicateDeliveries, 0),
       difference: duplicateDifference,
       verdict:
         duplicateReduction ? "improved" : existingDuplicateRuns === 0 && durableDuplicateRuns === 0 ? "parity" : "unproven",
     },
-    operatorBurden: {
-      existing: {
-        interventions: samples.reduce((total, sample) => total + sample.existingInterventions, 0),
-        commands: samples.reduce((total, sample) => total + sample.existingCommands, 0),
-        medianPerRun: median(samples.map((sample) => sample.existingInterventions)),
-      },
-      durable: {
-        interventions: samples.reduce((total, sample) => total + sample.durableInterventions, 0),
-        commands: samples.reduce((total, sample) => total + sample.durableCommands, 0),
-        medianPerRun: median(samples.map((sample) => sample.durableInterventions)),
-      },
-      existingRunsWithIntervention: existingInterventions,
-      durableRunsWithIntervention: durableInterventions,
-      difference: interventionDifference,
-      verdict:
-        operatorReduction
-          ? "improved"
-          : existingInterventionRuns === 0 && durableInterventionRuns === 0
-            ? "parity"
-            : "unproven",
+    staleOwner: {
+      attempts: staleAttempts,
+      accepted: staleAccepted,
+      nonVacuous: staleNonVacuous,
+      verdict: staleOwnerVerified ? "pass" : "fail",
     },
+    causalControl: { ...causalControl, recreated: causalRecreated },
     recoveryTime: {
       existingFaulted: stats(existingFaultedMs),
       durableFaulted: stats(durableFaultedMs),
@@ -416,22 +313,20 @@ export async function runBenefit(
       medianReductionPercent,
       verdict: medianReductionPercent >= thresholdPercent ? "improved" : "unproven",
     },
-    staleOwnerActions: {
-      existing: samples.reduce((total, sample) => total + sample.existingStaleActions, 0),
-      durable: samples.reduce((total, sample) => total + sample.durableStaleActions, 0),
-    },
     promotionGate: {
       duplicateReduction,
-      operatorReduction,
+      durablePrevented,
+      staleOwnerVerified,
       recoveryParity,
-      zeroStaleOwnerActions,
+      causalControlRecreated: causalRecreated,
       verdict: promotion ? "advance" : "hold",
     },
     samples,
     limits: [
-      "arm A is a reduced model of the existing path: the real wake queue, claim rules, and append-only outcome store, but the deterministic responder instead of a Pi model turn",
-      "operator interventions are the predeclared reconcile and resubmit actions the arm's post-recovery trace requires; they are not independently executed human commands, and automatic owner restart is not counted",
-      "the fault lands at one effect boundary on one task per run; other fault points and interleavings are covered by the correctness matrix, not this benefit sample",
+      "arm A is a reduced model of the existing path: the real wake queue, claim rules, and append-only outcome store, plus the branch's unread-row delivery loop, but the deterministic responder instead of a Pi model turn",
+      "arm A records a delivery at each presentation from the store's unread rows; arm B records one when the durable sink commits a new outcome row, so both count the externally visible outcome at its own boundary",
+      "the fault lands once per run on one task; other fault points and interleavings are covered by the correctness matrix, not this benefit sample",
+      "operator burden is deliberately not measured here and is not part of the gate; a real operator-burden study belongs to Phase 1",
       "the recovery-time threshold is derived from this lab's own run-to-run spread, so it is a local noise floor, not a production service-level objective",
     ],
   };

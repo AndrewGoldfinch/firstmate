@@ -25,15 +25,28 @@ export type OperationRecordView = {
   receiptSeq: number | null;
 };
 
+/** One externally visible delivery of a logical note. */
+export type Delivery = { note: string; owner: string };
+
+/** One attempt by a superseded owner, and whether the current authority took it. */
+export type StaleOwnerAttempt = {
+  note: string;
+  owner: string;
+  accepted: boolean;
+  code: string | null;
+};
+
 export type Trace = {
   outcomes: OutcomeRecord[];
   operations: OperationRecordView[];
   effects: Effect[];
+  /** Externally visible note deliveries, recorded at the delivery boundary. */
+  deliveries: Delivery[];
   acknowledgements: { task: string; owner: string }[];
+  /** Superseded-owner attempts and whether each was accepted. */
+  staleOwnerAttempts: StaleOwnerAttempt[];
   /** Rows the harness accepted for this scenario. */
   acceptedRows: string[];
-  /** Owners permitted to act. */
-  allowedOwners: string[];
 };
 
 export type Check = { name: string; ok: boolean; detail: string };
@@ -102,12 +115,15 @@ export function grade(tasks: readonly FleetTask[], trace: Trace): GradeResult {
     detail: effectDuplicates.length ? `duplicate effects: ${effectDuplicates.map((effect) => effect.effect).join(", ")}` : "no duplicate effects",
   });
 
-  const stale = trace.effects.filter((effect) => !trace.allowedOwners.includes(effect.owner));
-  const staleAcks = trace.acknowledgements.filter((ack) => !trace.allowedOwners.includes(ack.owner));
+  const acceptedStale = trace.staleOwnerAttempts.filter((attempt) => attempt.accepted);
   checks.push({
-    name: "no stale-owner effect or acknowledgement",
-    ok: stale.length === 0 && staleAcks.length === 0,
-    detail: stale.length + staleAcks.length > 0 ? `stale actions: ${stale.length + staleAcks.length}` : "no stale actions",
+    name: "no accepted stale-owner action",
+    ok: acceptedStale.length === 0,
+    detail: acceptedStale.length
+      ? `accepted stale actions: ${acceptedStale.map((attempt) => attempt.note).join(", ")}`
+      : trace.staleOwnerAttempts.length
+        ? `${trace.staleOwnerAttempts.length} stale attempt(s), all refused`
+        : "no stale attempts",
   });
 
   const lost = trace.acceptedRows.filter(
@@ -186,8 +202,14 @@ export function negativeControls(tasks: readonly FleetTask[], good: Trace): { na
       },
     },
     {
-      name: "change the owner of an acknowledgement",
-      trace: { ...good, acknowledgements: [...good.acknowledgements, { task: tasks[0]?.id ?? "T1", owner: "stale-owner" }] },
+      name: "accept a stale-owner action",
+      trace: {
+        ...good,
+        staleOwnerAttempts: [
+          ...good.staleOwnerAttempts,
+          { note: tasks[0]?.id ?? "T1", owner: "generation-1", accepted: true, code: null },
+        ],
+      },
     },
   ];
   return corruptions.map((corruption) => ({
