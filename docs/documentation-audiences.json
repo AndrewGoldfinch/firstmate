@@ -477,6 +477,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/22-delivery-hardening.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
