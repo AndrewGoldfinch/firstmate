@@ -1,6 +1,8 @@
-// Investigation, not a delivery fix. Called by fm-pi-branch-live-e2e.test.sh.
+// Delivery-boundary regression probe. Called by fm-pi-branch-live-e2e.test.sh.
 // Real extension, SDK, renderer and stores; no model calls. The controller
-// survives SIGKILL of each consumer and observes session JSONL independently.
+// survives SIGKILL of each consumer and observes session JSONL independently,
+// and asserts one committed note yields exactly one home-wide delivery across
+// restart, destination replacement, and stale-owner takeover, with no loss.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { fork, execFileSync } from "node:child_process";
@@ -82,6 +84,7 @@ async function worker() {
       else if (command === "retry") await session.extensionRunner.emit({ type: "turn_end", turnIndex: 0,
         message: { role: "assistant", content: [] }, toolResults: [] });
       else if (command === "pause-before-write") pauseBeforeWrite = true;
+      else if (command === "converse") manager.appendMessage({ role: "user", content: "Local fixture conversation", timestamp: Date.now() });
       else assert.equal(command, "snapshot");
       process.send({ id, snapshot: snapshot() });
     }).catch((error) => { process.send({ id, error: error.stack }); });
@@ -144,7 +147,9 @@ exec "$FM_F09_BASH" "$@"
       destinationRecords: readJsonl(snapshot.sessionFile).filter(isNote).length,
       lockPid: Number(fs.readFileSync(join(home, "state/.lock"), "utf8")),
       failedAcks: fs.existsSync(join(home, "faults.log"))
-        ? fs.readFileSync(join(home, "faults.log"), "utf8").trim().split("\n").length : 0 };
+        ? fs.readFileSync(join(home, "faults.log"), "utf8").trim().split("\n").length : 0,
+      deliveryMarkers: fs.existsSync(join(home, "state/.branch-outcomes-delivered"))
+        ? fs.readdirSync(join(home, "state/.branch-outcomes-delivered")).length : 0 };
     assert.equal(record.outcomeRows, 1, "delivery must never alter outcome cardinality");
     assert.deepEqual(record.errors, [], "unexpected SDK error invalidates the probe");
     observations.push(record);
@@ -230,14 +235,27 @@ exec "$FM_F09_BASH" "$@"
       const before = observe(home, "fresh-session-ack", await first.request("start"));
       assert.equal(before.memoryRecords, 1);
       assert.equal(before.diskRecords, 0);
-      assert.equal(before.unread, 0);
+      // A session Pi has not flushed cannot acknowledge: the note is deferred,
+      // never lost, and the cursor must not cross it.
+      assert.equal(before.unread, 1);
+      assert.equal(before.cursor, 0);
+      assert.equal(before.deliveryMarkers, 0);
       await kill(first);
       const second = await launch(home, { initialize: false });
       grant(home, second);
       const after = observe(home, "restart-after-skipped-persistence", await second.request("start"));
       assert.equal(after.diskRecords, 0);
-      assert.equal(after.renderedCopies, 0);
-      assert.equal(after.unread, 0);
+      assert.equal(after.unread, 1, "the deferred note must still be recoverable after a restart");
+      assert.equal(after.deliveryMarkers, 0);
+      // The first conversation is what lets Pi flush the session file: the
+      // deferred note lands on disk exactly once, then reconciles and reads.
+      const flushed = observe(home, "conversation-flushes-deferred-note", await second.request("converse"));
+      assert.equal(flushed.diskRecords, 1);
+      assert.equal(flushed.unread, 1);
+      const settled = observe(home, "reconcile-after-flush", await second.request("retry"));
+      assert.equal(settled.diskRecords, 1);
+      assert.equal(settled.unread, 0);
+      assert.equal(settled.deliveryMarkers, 0, "a read row clears its home-wide marker");
       await kill(second);
     }
     {
@@ -246,22 +264,29 @@ exec "$FM_F09_BASH" "$@"
       grant(home, first);
       fs.chmodSync(first.ready.sessionFile, 0o400);
       const failed = observe(home, "session-write-denied", await first.request("start"));
-      assert.equal(failed.memoryRecords, 1);
+      // The denied append is rolled back out of Pi's in-memory model, so no
+      // phantom can suppress the retry that persists it.
+      assert.equal(failed.memoryRecords, 0);
       assert.equal(failed.diskRecords, 0);
       assert.equal(failed.renderedCopies, 0);
       assert.equal(failed.unread, 1);
+      assert.equal(failed.deliveryMarkers, 0);
       assert.deepEqual(failed.ioErrors, ["EACCES"], "the real session write must be denied by the OS");
+      // The denied append is retried for real once the file is writable again:
+      // the durable record lands exactly once and only then does the cursor
+      // cross it.
       fs.chmodSync(first.ready.sessionFile, 0o600);
-      const poisoned = observe(home, "retry-after-storage-recovery", await first.request("retry"));
-      assert.equal(poisoned.diskRecords, 0);
-      assert.equal(poisoned.unread, 0);
+      const recovered = observe(home, "retry-after-storage-recovery", await first.request("retry"));
+      assert.equal(recovered.diskRecords, 1);
+      assert.equal(recovered.unread, 0);
+      assert.equal(recovered.deliveryMarkers, 0);
       await kill(first);
       const second = await launch(home);
       grant(home, second);
-      const after = observe(home, "restart-after-false-ack", await second.request("start"));
-      assert.equal(after.renderedCopies, 0);
-      assert.equal(after.diskRecords, 0);
+      const after = observe(home, "restart-after-recovery", await second.request("start"));
+      assert.equal(after.diskRecords, 1);
       assert.equal(after.unread, 0);
+      assert.equal(after.deliveryMarkers, 0);
       await kill(second);
     }
     {
@@ -277,9 +302,12 @@ exec "$FM_F09_BASH" "$@"
       const second = await launch(home, { destination: "replacement" });
       grant(home, second);
       const after = observe(home, "delivered-in-replacement-destination", await second.request("start"));
-      assert.equal(after.diskRecords, 2);
-      assert.equal(after.renderedCopies, 1);
+      // One committed note is one home-wide delivery: the replacement recognizes
+      // it by identity, renders nothing new, and only completes the cursor.
+      assert.equal(after.diskRecords, 1);
+      assert.equal(after.renderedCopies, 0);
       assert.equal(after.unread, 0);
+      assert.equal(after.deliveryMarkers, 0);
       await kill(second);
     }
     {
@@ -306,22 +334,27 @@ exec "$FM_F09_BASH" "$@"
       }
       assert.ok(stopped, "old consumer must reach the real destination-write barrier");
       grant(home, second);
-      const replacement = observe(home, "replacement-delivers-while-old-stopped", await second.request("start"));
-      assert.equal(replacement.diskRecords, 1);
-      assert.equal(replacement.renderedCopies, 1);
-      assert.equal(replacement.unread, 0);
+      const coreReplacement = observe(home, "replacement-delivers-while-old-stopped", await second.request("start"));
+      assert.equal(coreReplacement.diskRecords, 1);
+      assert.equal(coreReplacement.renderedCopies, 1);
+      assert.equal(coreReplacement.unread, 0);
+      assert.equal(coreReplacement.deliveryMarkers, 0);
       first.child.kill("SIGCONT");
       const stale = observe(home, "old-owner-resumes-after-replacement", await blocked);
       assert.notEqual(stale.pid, stale.lockPid);
-      assert.equal(stale.diskRecords, 2);
+      // The stale owner lost the delivery fence and removed its own duplicate;
+      // the home keeps exactly one recorded delivery.
+      assert.equal(stale.diskRecords, 1);
       assert.equal(stale.renderedCopies, 1);
+      assert.equal(stale.unread, 0);
+      assert.equal(stale.deliveryMarkers, 0);
       await kill(first);
       await kill(second);
     }
-    report.verdict = "HOLD";
+    report.verdict = "PASS";
     save();
     for (const row of observations.filter((row) => row.scenario)) console.log(JSON.stringify(row));
-    console.log("F09_PROBE_COMPLETE verdict=HOLD; known loss, destination-change and stale-owner counterexamples reproduced");
+    console.log("F09_PROBE_COMPLETE verdict=PASS; one committed note is one home-wide delivery across restart, destination replacement, and stale-owner takeover");
   } catch (error) {
     report.verdict = "PROBE_FAILED";
     report.error = error.stack;

@@ -150,6 +150,12 @@ const config = process.env.FM_CONFIG_OVERRIDE || `${fmHome}/config`;
 const sessionsDir = join(state, "branch-session");
 const sessionPointer = join(state, ".branch-session");
 const mirrorCursorFile = join(state, ".branch-mirror-cursor");
+// Home-wide delivery ledger for the opt-in durable routine identity: one
+// zero-byte marker per delivered store sequence, created with O_EXCL. Its
+// presence is what makes one committed note exactly one delivery across a
+// replaced destination session, and the exclusive create is the fence that
+// stops a stale owner from committing a second copy.
+const deliveredMarkerDir = join(state, ".branch-outcomes-delivered");
 const promptScript = join(fmRoot, "bin", "fm-branch-prompt.sh");
 const afkContractScript = join(fmRoot, "bin", "fm-afk-contract.sh");
 const outcomeScript = join(fmRoot, "bin", "fm-branch-outcome.sh");
@@ -1011,36 +1017,155 @@ export default function (pi: ExtensionAPI) {
     };
   }
 
+  // Durable delivery identity lives in the destination session FILE, not in
+  // Pi's in-memory model. getEntries() reads Pi's fileEntries, which Pi fills
+  // BEFORE _persist can throw or silently skip, so an in-memory match is not a
+  // durable delivery on its own. Pi marks `flushed` only after it has written
+  // the session file, so a never-flushed session (a fresh session with no
+  // conversation yet) stays pending until Pi flushes it; an unknown flag (a
+  // fixture stub) keeps the historical in-memory contract.
+  function sessionFlushed(session: ReadonlyEntries): boolean {
+    return (session as { flushed?: boolean }).flushed !== false;
+  }
+
+  // Roll a failed append back out of Pi's in-memory model. Pi pushes into
+  // fileEntries before _persist runs, so a throwing persist would otherwise
+  // leave a phantom that the next reconciliation mistakes for a delivery and
+  // never retries. Reached only on a real storage failure; a model we cannot
+  // un-poison only costs one extra attempt, never a loss, because the read
+  // cursor still refuses to cross an unflushed record.
+  function unpoisonSessionEntry(session: ReadonlyEntries, customType: string, deliveryId: string): void {
+    try {
+      const model = session as unknown as {
+        fileEntries?: Array<{ type?: string; customType?: string; id?: string; parentId?: string | null; data?: { deliveryId?: unknown } }>;
+        byId?: Map<string, unknown>;
+        leafId?: string | null;
+      };
+      if (!Array.isArray(model.fileEntries)) return;
+      const index = model.fileEntries.findIndex((entry) =>
+        entry?.type === "custom" && entry.customType === customType
+        && entry.data !== null && typeof entry.data === "object" && entry.data.deliveryId === deliveryId);
+      if (index < 0) return;
+      const [removed] = model.fileEntries.splice(index, 1);
+      if (removed?.id) {
+        model.byId?.delete?.(removed.id);
+        if (model.leafId === removed.id) model.leafId = removed.parentId ?? null;
+      }
+    } catch {
+      // Best effort; the retry below still re-appends when the session can write.
+    }
+  }
+
+  // Remove exactly the record this owner appended after it lost the delivery
+  // fence, so the home keeps one durable copy. The record is identified by its
+  // own deliveryId, never by sequence, so a sibling owner's copy survives.
+  function rollbackDeliveryEntry(file: string | undefined, customType: string, deliveryId: string): void {
+    if (!file) return;
+    let text: string;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch {
+      return;
+    }
+    const kept: string[] = [];
+    let removed = false;
+    for (const line of text.split("\n")) {
+      if (!line) continue;
+      let mine = false;
+      try {
+        const entry = JSON.parse(line) as { type?: string; customType?: string; data?: { deliveryId?: unknown } };
+        mine = entry.type === "custom" && entry.customType === customType
+          && entry.data !== null && typeof entry.data === "object" && entry.data.deliveryId === deliveryId;
+      } catch {
+        // A line we cannot parse is not ours; preserve it.
+      }
+      if (mine) { removed = true; continue; }
+      kept.push(line);
+    }
+    if (!removed) return;
+    try {
+      const tmp = `${file}.fm-rollback-${process.pid}`;
+      writeFileSync(tmp, kept.length ? `${kept.join("\n")}\n` : "");
+      renameSync(tmp, file);
+    } catch {
+      // A committed home-wide marker still makes the delivery exactly once for
+      // later readers; a failed rollback leaves only a stray line.
+    }
+  }
+
+  const deliveredMarkerPath = (seq: number): string => join(deliveredMarkerDir, String(seq));
+  const deliveryCommitted = (seq: number): boolean => existsSync(deliveredMarkerPath(seq));
+
+  // The atomic home-wide claim for one routine sequence. O_EXCL is the fence:
+  // exactly one owner in the home creates it, and a replacement destination
+  // consults it instead of delivering the same logical note a second time.
+  function commitDelivery(seq: number): boolean {
+    try {
+      mkdirSync(deliveredMarkerDir, { recursive: true });
+      writeFileSync(deliveredMarkerPath(seq), "", { flag: "wx", mode: 0o600 });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function clearDelivery(seq: number): void {
+    try {
+      rmSync(deliveredMarkerPath(seq), { force: true });
+    } catch {
+      // A leftover marker only suppresses a re-delivery of an already-read row.
+    }
+  }
+
+  // Append one sequence-keyed delivery record and prove it durable before its
+  // caller may advance the read cursor. Returns the deliveryId of a record this
+  // call appended, null when a durable match already existed, or ok:false when
+  // nothing durable was recorded. A stale owner that appended before losing
+  // ownership removes its own record again.
+  function appendDurableOutcome(
+    row: OutcomeRow,
+    customType: string,
+    parseRecord: (value: unknown) => OutcomeRow | null,
+    expectedGeneration: number,
+  ): { ok: true; deliveryId: string | null } | { ok: false } {
+    if (!currentMainSession) return { ok: false };
+    let matching = false;
+    for (const entry of currentMainSession.getEntries()) {
+      if (entry.type !== "custom" || entry.customType !== customType) continue;
+      const recorded = parseRecord(entry.data);
+      if (!recorded || recorded.seq !== row.seq) continue;
+      if (!sameOutcome(recorded, row)) return { ok: false };
+      matching = true;
+    }
+    if (matching) {
+      // A matching record is durable only once Pi has flushed the session;
+      // until then it is deferred, never re-appended, so the phantom cannot
+      // accumulate while the session has no conversation.
+      return sessionFlushed(currentMainSession) ? { ok: true, deliveryId: null } : { ok: false };
+    }
+    const deliveryId = randomUUID();
+    try {
+      pi.appendEntry(customType, { version: 1, ...row, deliveryId });
+    } catch {
+      unpoisonSessionEntry(currentMainSession, customType, deliveryId);
+      return { ok: false };
+    }
+    if (!sessionFlushed(currentMainSession)) return { ok: false };
+    if (!generationOwnsLockSync(expectedGeneration)) {
+      rollbackDeliveryEntry(currentMainSession.getSessionFile(), customType, deliveryId);
+      return { ok: false };
+    }
+    return { ok: true, deliveryId };
+  }
+
   // A captain outcome is delivered by a durable, rendered session entry, not
   // by asking main's model to acknowledge a hidden custom message. The store
   // sequence is the idempotency key: a reload after appendEntry but before
   // mark-read finds the same record and advances the cursor without appending
   // a duplicate. A conflicting record for one sequence fails closed.
-  function ensureVisibleCaptainOutcome(row: OutcomeRow): boolean {
+  function ensureVisibleCaptainOutcome(row: OutcomeRow, expectedGeneration: number): boolean {
     if (!currentMainSession || row.verdict !== "captain") return false;
-    let matching = false;
-    for (const entry of currentMainSession.getEntries()) {
-      if (entry.type !== "custom" || entry.customType !== VISIBLE_OUTCOME_ENTRY_TYPE) continue;
-      const entrySeq = entry.data && typeof entry.data === "object"
-        ? (entry.data as { seq?: unknown }).seq
-        : undefined;
-      if (entrySeq !== row.seq) continue;
-      const recorded = parseVisibleOutcomeRecord(entry.data);
-      if (!recorded || !sameOutcome(recorded, row)) return false;
-      matching = true;
-    }
-    if (matching) return true;
-    const record: VisibleOutcomeRecord = { version: 1, ...row };
-    try {
-      pi.appendEntry(VISIBLE_OUTCOME_ENTRY_TYPE, record);
-    } catch {
-      return false;
-    }
-    return currentMainSession.getEntries().some((entry) => {
-      if (entry.type !== "custom" || entry.customType !== VISIBLE_OUTCOME_ENTRY_TYPE) return false;
-      const recorded = parseVisibleOutcomeRecord(entry.data);
-      return recorded !== null && sameOutcome(recorded, row);
-    });
+    return appendDurableOutcome(row, VISIBLE_OUTCOME_ENTRY_TYPE, parseVisibleOutcomeRecord, expectedGeneration).ok;
   }
 
   // The default presentation path, unchanged: a plain custom message with no
@@ -1061,30 +1186,23 @@ export default function (pi: ExtensionAPI) {
   // entry appended synchronously, exactly like a captain outcome, so it is
   // durable and rendered before mark-read can cross it: a reload after delivery
   // and before mark-read finds it by store sequence and delivers nothing
-  // again. A conflicting record for one sequence fails closed. Return true only
-  // once the delivery is recorded in the session.
-  function ensureRoutineOutcome(row: OutcomeRow): boolean {
+  // again. The home-wide marker additionally lets a REPLACED destination
+  // recognize the note as already delivered rather than delivering it a second
+  // time. A conflicting record for one sequence fails closed.
+  function ensureRoutineOutcome(row: OutcomeRow, expectedGeneration: number): boolean {
     if (!currentMainSession || row.verdict !== "routine") return false;
-    let matching = false;
-    for (const entry of currentMainSession.getEntries()) {
-      if (entry.type !== "custom" || entry.customType !== VISIBLE_ROUTINE_ENTRY_TYPE) continue;
-      const recorded = parseRoutineDeliveryRecord(entry.data);
-      if (!recorded || recorded.seq !== row.seq) continue;
-      if (!sameOutcome(recorded, row)) return false;
-      matching = true;
-    }
-    if (matching) return true;
-    const record: RoutineDeliveryRecord = { version: 1, ...row };
-    try {
-      pi.appendEntry(VISIBLE_ROUTINE_ENTRY_TYPE, record);
-    } catch {
+    if (deliveryCommitted(row.seq)) return true;
+    const delivered = appendDurableOutcome(row, VISIBLE_ROUTINE_ENTRY_TYPE, parseRoutineDeliveryRecord, expectedGeneration);
+    if (!delivered.ok) return false;
+    // Claim the home-wide identity for a durable delivery, whether this call
+    // appended it or recognized an already-durable match. A lost claim means
+    // another owner committed first; only our own just-appended record is
+    // rolled back, so the home keeps exactly one copy.
+    if (!commitDelivery(row.seq) && delivered.deliveryId !== null) {
+      rollbackDeliveryEntry(currentMainSession.getSessionFile(), VISIBLE_ROUTINE_ENTRY_TYPE, delivered.deliveryId);
       return false;
     }
-    return currentMainSession.getEntries().some((entry) => {
-      if (entry.type !== "custom" || entry.customType !== VISIBLE_ROUTINE_ENTRY_TYPE) return false;
-      const recorded = parseRoutineDeliveryRecord(entry.data);
-      return recorded !== null && sameOutcome(recorded, row);
-    });
+    return true;
   }
 
   // Captain rows that are read (their visible entry exists) but not yet
@@ -1250,13 +1368,19 @@ export default function (pi: ExtensionAPI) {
         // captain visible entry already is. When not selected the presentation
         // path is unchanged.
         if (row.verdict === "captain") {
-          if (!ensureVisibleCaptainOutcome(row)) return false;
+          if (!ensureVisibleCaptainOutcome(row, expectedGeneration)) return false;
         } else if (durableDeliveryEnabled) {
-          if (!ensureRoutineOutcome(row)) return false;
+          if (!ensureRoutineOutcome(row, expectedGeneration)) return false;
         } else {
           deliverRoutineOutcome(row);
         }
+        // Fence the cursor advance on the live owner too: a process that lost
+        // the lock while delivering must not advance the home-wide read state.
+        if (!generationOwnsLockSync(expectedGeneration)) return false;
         if (!(await runOutcomeScript(["mark-read", "--through", String(row.seq)])).ok) return false;
+        // The row is read, so the home-wide marker has done its job; keep the
+        // ledger bounded to rows still unread after a failed cursor write.
+        if (row.verdict !== "captain" && durableDeliveryEnabled) clearDelivery(row.seq);
       }
     }
     if (!present) return true;

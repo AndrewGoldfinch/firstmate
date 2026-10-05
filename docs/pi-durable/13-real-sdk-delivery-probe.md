@@ -4,6 +4,9 @@ Decision: **HOLD - IMPLEMENTATION** under the six end-to-end delivery invariants
 The same-file F09 recovery mechanism works under normal persistence, but no-loss and stale-owner safety do not hold in the controlled cases below.
 This supersedes the conditional promotion recommendation in [verification 12](12-delivery-verification-2.md), without changing the frozen durable implementation.
 
+> Historical record: the two delivery-boundary defects this probe found are fixed in [delivery-boundary fix](14-delivery-boundary-fix.md), and the probe's assertions now encode the fixed one-delivery outcome and report `PASS`.
+> The counterexample tables below describe the pre-fix behavior and are kept as the characterization record.
+
 ## Scope and method
 
 Verified 5 October 2026 against FirstMate `8c68eaa8`, Pi coding-agent `1.0.0`, Node `v22.21.1`, Linux, and a non-root user.

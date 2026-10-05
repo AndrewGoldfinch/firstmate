@@ -6399,6 +6399,117 @@ EOF
   pass "a pi-durable provider selection routes a wake through the bridge into the existing outcome sink"
 }
 
+# A committed routine note is one home-wide delivery. A replacement destination
+# session is a new file; the home-wide identity must stop it from rendering a
+# second visible copy while the unread row is still recoverable.
+test_f09_durable_delivery_identity_replacement_destination_does_not_re_deliver() {
+  local repo home fakebin out status real_bash
+  repo="$TMP_ROOT/f09-durable-replacement-root"
+  home="$TMP_ROOT/f09-durable-replacement-home"
+  fakebin="$home/fakebin"
+  real_bash=$(command -v bash)
+  mkdir -p "$home/state" "$home/config" "$fakebin"
+  install_pi_branch_extension_fixture "$repo"
+  cat > "$fakebin/bash" <<'SH'
+#!/bin/sh
+armed=$(cat "$FM_TEST_FAIL_ARM" 2>/dev/null || printf '')
+if [ -n "$armed" ] && [ "$1" = "$FM_TEST_OUTCOME_SCRIPT" ] && [ "$2" = "$armed" ]; then
+  : > "$FM_TEST_FAIL_ARM"
+  echo "injected cursor-write failure" >&2
+  exit 9
+fi
+exec "$FM_TEST_REAL_BASH" "$@"
+SH
+  chmod +x "$fakebin/bash"
+  PATH="$fakebin:$PATH" PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_TEST_REAL_BASH="$real_bash" FM_TEST_OUTCOME_SCRIPT="$ROOT/bin/fm-branch-outcome.sh" \
+    FM_TEST_FAIL_ARM="$home/state/f09-replacement-fail-arm" FM_PI_DURABLE_DELIVERY="1" DRIVER_PRELUDE="$DRIVER_PRELUDE" \
+    node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
+const prelude = process.env.DRIVER_PRELUDE;
+await eval(`(async () => { ${prelude}; globalThis.__t = { fire, outcomeScript, mainEntries, home, defaultSessionCtx }; })()`);
+const { fire, outcomeScript, mainEntries, home, defaultSessionCtx } = globalThis.__t;
+import { writeFileSync } from "node:fs";
+
+const failArm = process.env.FM_TEST_FAIL_ARM;
+const armStoreFailure = (subcommand) => writeFileSync(failArm, subcommand);
+const durableCopies = (entries, summary) => entries.filter(
+  (entry) => entry.type === "custom" && entry.customType === "fm-branch-visible-routine"
+    && entry.data && entry.data.summary === summary,
+).length;
+
+await fire("session_start", {}, defaultSessionCtx);
+await fire("agent_start", {});
+const summary = "home-wide note delivered while the cursor write failed";
+outcomeScript(["append", "--task", "fleet", "--verdict", "routine", "--summary", summary]);
+armStoreFailure("mark-read");
+await fire("turn_end", {}, defaultSessionCtx);
+if (durableCopies(mainEntries, summary) !== 1) throw new Error(`the original destination did not deliver exactly once: ${durableCopies(mainEntries, summary)}`);
+if (outcomeScript(["unread"]) === "") throw new Error("the armed ack failure did not leave the row unread");
+
+const replacementEntries = [];
+const replacement = {
+  model: defaultSessionCtx.model,
+  modelRegistry: defaultSessionCtx.modelRegistry,
+  sessionManager: { getSessionFile: () => `${home}/replacement.jsonl`, getEntries: () => replacementEntries },
+};
+await fire("session_start", {}, replacement);
+await fire("agent_start", {});
+await fire("turn_end", {}, replacement);
+if (durableCopies(replacementEntries, summary) !== 0) throw new Error(`the replacement destination re-delivered the note: ${durableCopies(replacementEntries, summary)}`);
+if (durableCopies(mainEntries, summary) !== 1) throw new Error("the original delivery changed");
+if (outcomeScript(["unread"]) !== "") throw new Error("the replacement destination did not complete the cursor");
+process.exit(0);
+EOF
+  status=$?
+  out=$(cat "$TMP_ROOT/node-output")
+  expect_code 0 "$status" "a replacement destination must not re-deliver a home-wide routine note: $out"
+  pass "durable delivery identity keeps one committed routine note to one home-wide delivery across a destination replacement"
+}
+
+# A delivery is durable only once Pi has flushed the session file. A fresh
+# session with no conversation must defer the note, never acknowledge it from
+# the in-memory model, and the deferred entry must not accumulate.
+test_f09_durable_delivery_identity_defers_until_the_session_flushes() {
+  local repo home out status
+  repo="$TMP_ROOT/f09-durable-defer-root"
+  home="$TMP_ROOT/f09-durable-defer-home"
+  mkdir -p "$home/state" "$home/config"
+  install_pi_branch_extension_fixture "$repo"
+  PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_PI_DURABLE_DELIVERY="1" DRIVER_PRELUDE="$DRIVER_PRELUDE" \
+    node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
+const prelude = process.env.DRIVER_PRELUDE;
+await eval(`(async () => { ${prelude}; globalThis.__t = { fire, outcomeScript, home, defaultSessionCtx }; })()`);
+const { fire, outcomeScript, home, defaultSessionCtx } = globalThis.__t;
+
+const entries = [];
+const sessionManager = { getSessionFile: () => `${home}/unflushed.jsonl`, getEntries: () => entries, flushed: false };
+const deferred = { model: defaultSessionCtx.model, modelRegistry: defaultSessionCtx.modelRegistry, sessionManager };
+await fire("session_start", {}, deferred);
+await fire("agent_start", {});
+const summary = "deferred until the session file is flushed";
+outcomeScript(["append", "--task", "fleet", "--verdict", "routine", "--summary", summary]);
+await fire("turn_end", {}, deferred);
+const copies = () => entries.filter(
+  (entry) => entry.type === "custom" && entry.customType === "fm-branch-visible-routine" && entry.data && entry.data.summary === summary,
+).length;
+if (copies() !== 1) throw new Error(`the unflushed session appended ${copies()} records, expected one rendered entry`);
+if (outcomeScript(["unread"]) === "") throw new Error("an unflushed session acknowledged a delivery it did not persist");
+await fire("turn_end", {}, deferred);
+if (copies() !== 1) throw new Error(`the deferred entry duplicated: ${copies()}`);
+if (outcomeScript(["unread"]) === "") throw new Error("a second reconcile acknowledged an unpersisted delivery");
+sessionManager.flushed = true;
+await fire("turn_end", {}, deferred);
+if (copies() !== 1) throw new Error(`flushing duplicated the deferred entry: ${copies()}`);
+if (outcomeScript(["unread"]) !== "") throw new Error("the flushed session did not acknowledge its durable delivery");
+process.exit(0);
+EOF
+  status=$?
+  out=$(cat "$TMP_ROOT/node-output")
+  expect_code 0 "$status" "a durable note must defer until its session file is flushed: $out"
+  pass "durable delivery identity defers a note until the session file is flushed and never acknowledges an in-memory-only delivery"
+}
+
 test_outcomes_tool_call_headers_follow_the_loaded_pi_version
 test_outcomes_tool_uses_stock_execution_and_export_consumers
 test_real_pi_picker_primitives_stay_bounded_and_searchable
@@ -6453,4 +6564,6 @@ test_f09_durable_committed_routine_row_is_re_presented_across_cursor_failure
 test_f09_durable_delivery_identity_makes_routine_notes_exactly_once
 test_f09_durable_delivery_identity_survives_replay_and_takeover
 test_f09_durable_delivery_identity_streaming_neither_duplicates_nor_loses
+test_f09_durable_delivery_identity_replacement_destination_does_not_re_deliver
+test_f09_durable_delivery_identity_defers_until_the_session_flushes
 test_durable_provider_selection_routes_through_the_bridge

@@ -93,7 +93,7 @@ run_f09_probe() {
   local status=$?
   cat "$TMP_ROOT/f09-output"
   [ "$status" -eq 0 ] || fail "F09 probe failed to complete against Pi $PI_VERSION"
-  pass "real Pi SDK $PI_VERSION F09 observations collected (counterexamples are not promotion passes)"
+  pass "real Pi SDK $PI_VERSION F09 delivery boundary holds exactly one home-wide delivery with no loss"
 }
 
 if [ "${FM_PI_F09_ONLY:-0}" = 1 ]; then
