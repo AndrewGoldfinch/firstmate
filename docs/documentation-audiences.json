@@ -485,6 +485,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/24-delivery-serialization.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
