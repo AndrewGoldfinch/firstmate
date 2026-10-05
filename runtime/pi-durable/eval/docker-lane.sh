@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
 #
-# Disposable-container restart lane: F11 (service crash with a valid generation)
-# and F17 (container restart -> store reopen + authority reconciliation).
+# Disposable-container teardown lane: F11 (service crash with a valid
+# generation) and F17 (container teardown + recreate -> store reopen + authority
+# reconciliation).
 #
 # The failure boundary is owned here, outside the container. This script starts
-# a container that prepares one settled operation, kills it with SIGKILL, then
-# starts a second container on the same home to prove the store reopens and the
-# recorded authority reconciles instead of resetting.
+# a container that prepares one settled operation, SIGKILLs it, removes it, and
+# then starts a fresh container with its own namespaces against the same
+# bind-mounted home. That is a container and process boundary, not a host-kernel
+# reboot: the kernel and the store file are the same, and only the container
+# process tree is destroyed and rebuilt.
 #
-# `--pid=host` is required: the runtime ownership lock records a pid and treats
-# a live pid as a live owner, and pids are namespace-relative. Sharing the host
-# pid namespace is what makes the recorded owner genuinely dead after the kill.
+# The runtime ownership lock records a pid and treats a live pid as a live
+# owner. A pid is namespace-relative, so in a fresh pid namespace the recorded
+# owner pid cannot be trusted: the recreate container's own init typically
+# reuses the same low pid, and the lock's liveness check would then see a live
+# owner that is really the new process. The host therefore reclaims the stale
+# lock explicitly before starting the recreate container, which is what an
+# operator must do once the owner's pid namespace is gone.
 #
 # Usage: eval/docker-lane.sh [output.json]
 # Exit status is 0 when both cases pass or when the lane is honestly not-covered
@@ -76,9 +83,10 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   fi
 fi
 
+# No --pid=host: the recreate container gets its own pid namespace, which is
+# what forces the explicit lock reclaim below.
 run_args=(
   --rm
-  --pid=host
   --user "$(id -u):$(id -g)"
   -e FM_HOME=/home
   -v "$REPO_DIR:/repo:ro"
@@ -123,11 +131,37 @@ if [ -z "$serve_state" ]; then
   exit 1
 fi
 
-# The failure boundary: SIGKILL the container that holds a valid generation.
+# The failure boundary: SIGKILL the container that holds a valid generation,
+# then remove it so the recreate below is a genuine teardown, not a restart.
 if docker kill "$name" >/dev/null 2>&1; then
   killed=true
 fi
 docker wait "$name" >/dev/null 2>&1 || true
+docker rm -f "$name" >/dev/null 2>&1 || true
+container_removed=true
+if docker inspect "$name" >/dev/null 2>&1; then
+  container_removed=false
+fi
+
+# Reclaim the stale ownership lock explicitly. The recreate container is in its
+# own pid namespace, so the recorded owner pid is not a reliable liveness signal
+# there; see the header. The store itself is untouched, so authority still
+# reconciles from the persisted generation.
+lock_path="$home/state/pi-durable/store.lock"
+lock_reclaimed=false
+stale_owner_pid=""
+if [ -f "$lock_path" ]; then
+  stale_owner_pid="$(node -e '
+    const fs = require("node:fs");
+    try {
+      const record = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      process.stdout.write(typeof record.pid === "number" ? String(record.pid) : "");
+    } catch {}
+  ' "$lock_path" 2>/dev/null || true)"
+  if rm -f "$lock_path" 2>/dev/null; then
+    lock_reclaimed=true
+  fi
+fi
 
 verify_output="$("${verify_cmd[@]}" 2>&1)"
 verify_result="$(printf '%s\n' "$verify_output" | sed -n 's/^VERIFY_RESULT //p' | tail -1)"
@@ -154,6 +188,9 @@ export VERIFY_RESULT="$verify_result"
 export DOCKER_SERVER="$docker_server"
 export IMAGE
 export KILLED="$killed"
+export CONTAINER_REMOVED="$container_removed"
+export LOCK_RECLAIMED="$lock_reclaimed"
+export STALE_OWNER_PID="$stale_owner_pid"
 export BUILD_COMMAND="$build_command"
 export SERVE_COMMAND="${serve_cmd[*]}"
 export VERIFY_COMMAND="${verify_cmd[*]}"
@@ -181,11 +218,21 @@ node -e '
     verify.staleCode === "AUTHORITY_STALE" &&
     verify.operationState === "settled" &&
     verify.receiptSeq === serve.seq &&
-    verify.outcomeRows === 1;
+    verify.outcomeRows === 1 &&
+    process.env.CONTAINER_REMOVED === "true" &&
+    process.env.LOCK_RECLAIMED === "true";
+  const staleOwnerPid = process.env.STALE_OWNER_PID ? Number(process.env.STALE_OWNER_PID) : null;
   const document = {
     status: f11 && f17 ? "pass" : "fail",
     image: process.env.IMAGE,
     dockerServer: process.env.DOCKER_SERVER,
+    lockReclaim: {
+      required: true,
+      reclaimed: process.env.LOCK_RECLAIMED === "true",
+      staleOwnerPid,
+      reason:
+        "the recreate container has its own pid namespace, so the recorded owner pid is not a reliable liveness signal and the stale lock is reclaimed explicitly",
+    },
     commands: [
       process.env.BUILD_COMMAND,
       process.env.SERVE_COMMAND,
@@ -205,7 +252,7 @@ node -e '
     },
     f17: {
       status: f17 ? "pass" : "fail",
-      case: "container restart -> store reopen + authority reconciliation",
+      case: "container teardown + recreate -> store reopen + authority reconciliation",
       evidence: {
         storeReopened: verify.storePath !== null,
         authorityReconciled: verify.created === false,
@@ -216,6 +263,9 @@ node -e '
         receiptSeq: verify.receiptSeq,
         expectedReceiptSeq: serve.seq,
         outcomeRows: verify.outcomeRows,
+        containerRemoved: process.env.CONTAINER_REMOVED === "true",
+        lockReclaimed: process.env.LOCK_RECLAIMED === "true",
+        staleOwnerPid,
         nodeInContainer: verify.node,
       },
     },

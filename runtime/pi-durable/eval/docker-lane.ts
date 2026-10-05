@@ -1,10 +1,11 @@
 /**
- * Host half of the disposable-container restart lane.
+ * Host half of the disposable-container teardown lane.
  *
  * Runs `eval/docker-lane.sh`, which owns the failure boundary outside the
- * container, and returns its verdict. When the lane cannot run here - no Docker
- * daemon, no image, or an explicit skip - the result is an honest not-covered
- * record with the reason, never a fabricated pass.
+ * container - SIGKILL, remove, recreate with fresh namespaces - and returns its
+ * verdict. When the lane cannot run here - no Docker daemon, no image, or an
+ * explicit skip - the result is an honest not-covered record with the reason,
+ * never a fabricated pass.
  */
 
 import { spawn } from "node:child_process";
@@ -17,12 +18,20 @@ export type DockerLaneCase = {
   evidence: Record<string, unknown>;
 };
 
+export type DockerLaneLockReclaim = {
+  required: boolean;
+  reclaimed: boolean;
+  staleOwnerPid: number | null;
+  reason: string;
+};
+
 export type DockerLaneResult = {
   status: "pass" | "fail" | "not-covered";
   reason?: string;
   image?: string | null;
   dockerServer?: string | null;
   commands?: string[];
+  lockReclaim?: DockerLaneLockReclaim;
   f11?: DockerLaneCase;
   f17?: DockerLaneCase;
 };

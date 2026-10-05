@@ -1,13 +1,18 @@
 /**
- * Container half of the disposable-container restart lane (F11 and F17).
+ * Container half of the disposable-container teardown lane (F11 and F17).
  *
  * `serve` prepares one supervisor and one settled operation, prints its
- * evidence, and stays alive so the host can kill the container. `verify`
- * reopens the same home in a fresh container and checks that the runtime store
- * and the recorded authority binding survived the kill.
+ * evidence, and stays alive so the host can SIGKILL and remove the container.
+ * `verify` reopens the same home in a fresh container - with its own
+ * namespaces, including its own pid namespace - and checks that the runtime
+ * store and the recorded authority binding survived the boundary.
  *
- * The failure boundary - kill and restart - is owned by the host, outside the
- * container. Nothing here simulates a crash; it is one.
+ * The failure boundary - kill, remove, recreate - is owned by the host, outside
+ * the container. Nothing here simulates a crash; it is one. This is a container
+ * and process boundary, not a host-kernel reboot: the store file and the kernel
+ * are the same, and the host reclaims the stale ownership lock explicitly
+ * because the recorded owner pid is not a reliable liveness signal across pid
+ * namespaces.
  */
 
 import { spawn } from "node:child_process";
