@@ -144,6 +144,9 @@ export function renderReport(results: EvaluationResults): string {
   lines.push(
     "Decision: HOLD - SCOPE / IMPLEMENTATION. The prototype successfully validates durable/idempotent outcome persistence, but that mechanism does not address the documented duplicate-delivery failure because routine-note presentation occurs downstream in a shared non-idempotent consumer.",
   );
+  lines.push(
+    "Scope: this report is the Durable Outcome lab artifact. The live Durable Delivery status and the Phase 1 gate are owned by docs/pi-durable/09-roadmap.md, 13-real-sdk-delivery-probe.md, and 14-delivery-boundary-fix.md; the real-SDK probe (tests/assets/pi-f09-probe.mjs) supersedes this harness for the delivery question.",
+  );
   lines.push("");
   lines.push(
     "Decision rule: advance to Phase 1 if and only if independent observation shows the existing path can produce duplicate externally visible outcomes under the tested fault, durable execution prevents them across the adversarial interleavings, the stale-owner test is non-vacuous, and the dedup-disabled control still recreates the failure. Operator burden is not part of the gate. Recovery time is an observation, not a claimed benefit.",

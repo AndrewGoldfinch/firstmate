@@ -1,10 +1,11 @@
 # Pi Durable evaluation report (P2)
 
-Generated 2026-10-05T05:11:58.154Z.
+Generated 2026-10-05T15:27:01.784Z.
 
 ## Decision
 
 Decision: HOLD - SCOPE / IMPLEMENTATION. The prototype successfully validates durable/idempotent outcome persistence, but that mechanism does not address the documented duplicate-delivery failure because routine-note presentation occurs downstream in a shared non-idempotent consumer.
+Scope: this report is the Durable Outcome lab artifact. The live Durable Delivery status and the Phase 1 gate are owned by docs/pi-durable/09-roadmap.md, 13-real-sdk-delivery-probe.md, and 14-delivery-boundary-fix.md; the real-SDK probe (tests/assets/pi-f09-probe.mjs) supersedes this harness for the delivery question.
 
 Decision rule: advance to Phase 1 if and only if independent observation shows the existing path can produce duplicate externally visible outcomes under the tested fault, durable execution prevents them across the adversarial interleavings, the stale-owner test is non-vacuous, and the dedup-disabled control still recreates the failure. Operator burden is not part of the gate. Recovery time is an observation, not a claimed benefit.
 Residual risk carried forward verbatim: "full Pi integration fidelity has not been empirically validated because the live SDK cannot be exercised in the prototype environment; Phase 1 must validate this against the real execution path before broader adoption."
@@ -77,18 +78,18 @@ docker run --rm --user 1000:1000 -e FM_HOME=/home -v /home/andy/dev/firstmate:/r
 ## Bounded real-model pilot
 
 Status: pass.
-Provider opencode-go, model muse-spark-1.3-contributor; 6 calls in 12220 ms with 0 timeouts.
+Provider opencode-go, model muse-spark-1.3-contributor; 6 calls in 18163 ms with 0 timeouts.
 Both arms ran against the same real model answers, so the arms differ only in execution durability; arm A completed=true, arm B completed=true.
-The model matched the fixture's required disposition on 5 of 6 tasks, so a real model does not simply reproduce the fixture.
+The model matched the fixture's required disposition on 6 of 6 tasks, so a real model does not simply reproduce the fixture.
 
 | Task | Verdict | Latency | Answer |
 | --- | --- | --- | --- |
-| T1 | routine | 1533 ms | disposition=ready_for_review; worker done tests pass pending review |
-| T2 | routine | 2922 ms | disposition=surface_failure; worker claims completion but CI has failing case |
-| T3 | routine | 1351 ms | disposition=working; heartbeat shows progress despite no output |
-| T4 | captain | 1861 ms | disposition=escalate_decision; Work needs a captain-owned decision |
-| T5 | routine | 2499 ms | disposition=recover_or_escalate; worker exit with incomplete result needs recovery |
-| T6 | routine | 2054 ms | disposition=ready_for_review; duplicates deduped and late event ignored |
+| T1 | routine | 3113 ms | disposition=ready_for_review; tests pass, awaiting review |
+| T2 | routine | 3351 ms | disposition=surface_failure; worker claims completion but CI has failing case |
+| T3 | routine | 3839 ms | disposition=working; heartbeat shows progress |
+| T4 | captain | 1373 ms | disposition=escalate_decision; needs captain-owned decision |
+| T5 | captain | 4590 ms | disposition=recover_or_escalate; worker exit with incomplete result needs recovery |
+| T6 | routine | 1896 ms | disposition=preserve_state; duplicate and late older event ignored idempotently |
 
 ## Benefit validation (promotion gate)
 
@@ -99,7 +100,7 @@ Fault: both arms: crash after the routine note on T3 is delivered, before its cu
 | Experiment | Arm A existing | Arm B pi-durable | Difference (A - B) | Verdict |
 | --- | --- | --- | --- | --- |
 | Duplicate externally visible delivery | 30 duplicates in 30/30 runs (100%, 95% CI 88.6%-100%) | 30 duplicates in 30/30 runs (100%, 95% CI 88.6%-100%) | 0% points, 95% CI -11.4%-11.4% | unproven |
-| Recovery time (observation, not a claimed benefit) | median 1311 ms (range 1228-1383) | median 841 ms (range 785-902) | durable arm median recovery was 841 ms vs 1311 ms for the existing-path model; performance benefit is not claimed because the experiment was designed for correctness rather than latency measurement | observation |
+| Recovery time (observation, not a claimed benefit) | median 1161 ms (range 1115-1257) | median 731 ms (range 718-1148) | durable arm median recovery was 731 ms vs 1161 ms for the existing-path model; performance benefit is not claimed because the experiment was designed for correctness rather than latency measurement | observation |
 
 Promotion gate (reduced-model lab result): duplicate externally visible delivery no, durable arm prevented duplicates no, durable replay appends exactly one row yes, stale-owner refusal verified yes, recovery parity yes, dedup-disabled control recreates the failure yes -> not cleared, keep the HOLD decision.
 Dedup-disabled causal control (same real store): with an operation key 1 row(s); without one 2 row(s).
@@ -108,36 +109,36 @@ Stale-owner check: 30 superseded-owner attempt(s), 0 accepted.
 
 | Run | Arm A faulted (ms) | Arm B faulted (ms) | Arm A deliveries | Arm B deliveries | Arm A duplicate deliveries | Arm B duplicate deliveries |
 | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 1233 | 804 | 7 | 7 | 1 | 1 |
-| 1 | 1242 | 793 | 7 | 7 | 1 | 1 |
-| 2 | 1281 | 790 | 7 | 7 | 1 | 1 |
-| 3 | 1261 | 819 | 7 | 7 | 1 | 1 |
-| 4 | 1245 | 795 | 7 | 7 | 1 | 1 |
-| 5 | 1235 | 797 | 7 | 7 | 1 | 1 |
-| 6 | 1261 | 790 | 7 | 7 | 1 | 1 |
-| 7 | 1235 | 786 | 7 | 7 | 1 | 1 |
-| 8 | 1228 | 789 | 7 | 7 | 1 | 1 |
-| 9 | 1237 | 785 | 7 | 7 | 1 | 1 |
-| 10 | 1272 | 805 | 7 | 7 | 1 | 1 |
-| 11 | 1250 | 808 | 7 | 7 | 1 | 1 |
-| 12 | 1304 | 841 | 7 | 7 | 1 | 1 |
-| 13 | 1307 | 858 | 7 | 7 | 1 | 1 |
-| 14 | 1323 | 841 | 7 | 7 | 1 | 1 |
-| 15 | 1311 | 846 | 7 | 7 | 1 | 1 |
-| 16 | 1336 | 902 | 7 | 7 | 1 | 1 |
-| 17 | 1340 | 866 | 7 | 7 | 1 | 1 |
-| 18 | 1338 | 856 | 7 | 7 | 1 | 1 |
-| 19 | 1310 | 868 | 7 | 7 | 1 | 1 |
-| 20 | 1323 | 855 | 7 | 7 | 1 | 1 |
-| 21 | 1383 | 853 | 7 | 7 | 1 | 1 |
-| 22 | 1348 | 855 | 7 | 7 | 1 | 1 |
-| 23 | 1339 | 853 | 7 | 7 | 1 | 1 |
-| 24 | 1335 | 847 | 7 | 7 | 1 | 1 |
-| 25 | 1321 | 838 | 7 | 7 | 1 | 1 |
-| 26 | 1322 | 860 | 7 | 7 | 1 | 1 |
-| 27 | 1334 | 841 | 7 | 7 | 1 | 1 |
-| 28 | 1328 | 868 | 7 | 7 | 1 | 1 |
-| 29 | 1311 | 856 | 7 | 7 | 1 | 1 |
+| 0 | 1142 | 723 | 7 | 7 | 1 | 1 |
+| 1 | 1170 | 763 | 7 | 7 | 1 | 1 |
+| 2 | 1176 | 738 | 7 | 7 | 1 | 1 |
+| 3 | 1134 | 722 | 7 | 7 | 1 | 1 |
+| 4 | 1116 | 723 | 7 | 7 | 1 | 1 |
+| 5 | 1185 | 727 | 7 | 7 | 1 | 1 |
+| 6 | 1115 | 718 | 7 | 7 | 1 | 1 |
+| 7 | 1129 | 719 | 7 | 7 | 1 | 1 |
+| 8 | 1161 | 831 | 7 | 7 | 1 | 1 |
+| 9 | 1210 | 771 | 7 | 7 | 1 | 1 |
+| 10 | 1176 | 723 | 7 | 7 | 1 | 1 |
+| 11 | 1125 | 733 | 7 | 7 | 1 | 1 |
+| 12 | 1168 | 865 | 7 | 7 | 1 | 1 |
+| 13 | 1226 | 729 | 7 | 7 | 1 | 1 |
+| 14 | 1148 | 721 | 7 | 7 | 1 | 1 |
+| 15 | 1164 | 739 | 7 | 7 | 1 | 1 |
+| 16 | 1176 | 772 | 7 | 7 | 1 | 1 |
+| 17 | 1180 | 767 | 7 | 7 | 1 | 1 |
+| 18 | 1164 | 1148 | 7 | 7 | 1 | 1 |
+| 19 | 1218 | 749 | 7 | 7 | 1 | 1 |
+| 20 | 1150 | 728 | 7 | 7 | 1 | 1 |
+| 21 | 1145 | 721 | 7 | 7 | 1 | 1 |
+| 22 | 1150 | 730 | 7 | 7 | 1 | 1 |
+| 23 | 1144 | 722 | 7 | 7 | 1 | 1 |
+| 24 | 1161 | 718 | 7 | 7 | 1 | 1 |
+| 25 | 1257 | 793 | 7 | 7 | 1 | 1 |
+| 26 | 1175 | 744 | 7 | 7 | 1 | 1 |
+| 27 | 1150 | 759 | 7 | 7 | 1 | 1 |
+| 28 | 1138 | 721 | 7 | 7 | 1 | 1 |
+| 29 | 1131 | 732 | 7 | 7 | 1 | 1 |
 
 Benefit-validation limits:
 - arm A is a reduced model of the existing path: the real wake queue, claim rules, and append-only outcome store, plus the branch's unread-row delivery loop, but the deterministic responder instead of a Pi model turn.
@@ -155,15 +156,15 @@ Benefit-validation limits:
 | Duplicate-delivery avoidance | Duplicate externally visible deliveries (paired fault runs) | 30 | 30 | unproven |
 | Controlled ownership | Accepted stale-owner actions | 0 | 0 | pass |
 | Useful visibility | Recoverable settlements | n/a | 6 | pass |
-| Recovery time (observation, not a claimed benefit) | Median faulted-scenario time (ms) | 1311 | 841 | observation |
+| Recovery time (observation, not a claimed benefit) | Median faulted-scenario time (ms) | 1161 | 731 | observation |
 
 ## Threshold calibration
 
 Status: pass over 10 deterministic runs.
-Median scenario time (ms): arm A 928, arm B 453, arm A faulted 986, arm B faulted 453.
+Median scenario time (ms): arm A 1119, arm B 693, arm A faulted 1172, arm B faulted 710.
 Calibrated thresholds: at least 50% fewer manual recovery actions, at least 30% lower median faulted-scenario time, and healthy-scenario time within 15% of baseline.
-Measured noise floor: 3% of the faulted baseline median.
-Basis: measured over 10 deterministic runs: median absolute deviation of the faulted baseline is 3% of its median, so the recovery-time threshold is max(30%, 3x noise) and the healthy-latency tolerance is max(15%, 2x noise).
+Measured noise floor: 1% of the faulted baseline median.
+Basis: measured over 10 deterministic runs: median absolute deviation of the faulted baseline is 1% of its median, so the recovery-time threshold is max(30%, 3x noise) and the healthy-latency tolerance is max(15%, 2x noise).
 Verdicts: manual recovery actions unproven, recovery time unproven, duplicate outcomes unproven.
 These verdicts apply only to the legacy proxy metrics above; the promotion gate is decided by the paired benefit validation.
 
@@ -175,16 +176,16 @@ These verdicts apply only to the legacy proxy metrics above; the promotion gate 
 
 | Run | Arm A (ms) | Arm B (ms) | Arm A faulted (ms) | Arm B faulted (ms) |
 | --- | --- | --- | --- | --- |
-| 1 | 936 | 470 | 1106 | 483 |
-| 2 | 928 | 455 | 1060 | 493 |
-| 3 | 928 | 460 | 975 | 449 |
-| 4 | 886 | 449 | 961 | 453 |
-| 5 | 889 | 440 | 958 | 449 |
-| 6 | 938 | 442 | 960 | 448 |
-| 7 | 909 | 440 | 975 | 446 |
-| 8 | 935 | 462 | 996 | 497 |
-| 9 | 958 | 472 | 999 | 462 |
-| 10 | 908 | 451 | 1001 | 453 |
+| 1 | 1120 | 704 | 1187 | 710 |
+| 2 | 1148 | 696 | 1215 | 729 |
+| 3 | 1148 | 715 | 1194 | 706 |
+| 4 | 1118 | 689 | 1166 | 700 |
+| 5 | 1108 | 686 | 1170 | 709 |
+| 6 | 1145 | 703 | 1176 | 728 |
+| 7 | 1136 | 690 | 1167 | 725 |
+| 8 | 1112 | 691 | 1164 | 703 |
+| 9 | 1107 | 688 | 1158 | 696 |
+| 10 | 1118 | 702 | 1175 | 711 |
 
 ## Raw evidence
 
