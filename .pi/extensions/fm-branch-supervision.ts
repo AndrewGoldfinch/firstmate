@@ -1056,23 +1056,22 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  // Remove exactly the record this owner appended after it lost the delivery
-  // fence, but only while a durable delivery for the same store sequence
-  // survives without it. An adopted record has no sibling copy, so deleting it
-  // would lose the only committed delivery; a home-wide marker that names a
-  // different record, or a different record still in the session file, is the
-  // proof that a sibling exists.
-  function rollbackDeliveryEntry(seq: number, file: string | undefined, customType: string, deliveryId: string, force = false): void {
+  // Remove exactly this owner's losing sibling record, but only while a
+  // durable delivery for the same store sequence survives without it. An
+  // adopted record has no sibling copy, so deleting it would lose the only
+  // committed delivery; a home-wide marker that names a different record, or a
+  // different record still in the session file, is the proof that a sibling
+  // exists. This is never reached on a lost fence: a superseded owner keeps
+  // the record it made durable and a replacement adopts it.
+  function rollbackDeliveryEntry(seq: number, file: string | undefined, customType: string, deliveryId: string): void {
     if (!file) return;
-    if (!force) {
-      const committedId = readCommittedDeliveryId(seq);
-      // Our own record is the committed delivery (possibly adopted by a
-      // replacement), so the stale owner must leave it in place.
-      if (committedId === deliveryId) return;
-      // No marker names a winner: only remove ours when a sibling for the same
-      // sequence is still recorded, otherwise ours is the only durable copy.
-      if (committedId === null && !hasSiblingDelivery(file, customType, seq, deliveryId)) return;
-    }
+    const committedId = readCommittedDeliveryId(seq);
+    // Our own record is the committed delivery (possibly adopted by a
+    // replacement), so the stale owner must leave it in place.
+    if (committedId === deliveryId) return;
+    // No marker names a winner: only remove ours when a sibling for the same
+    // sequence is still recorded, otherwise ours is the only durable copy.
+    if (committedId === null && !hasSiblingDelivery(file, customType, seq, deliveryId)) return;
     let text: string;
     try {
       text = readFileSync(file, "utf8");
@@ -1364,17 +1363,14 @@ export default function (pi: ExtensionAPI) {
     }
     if (!sessionFlushed(currentMainSession)) return { ok: false, durable: false, deliveryId: null, appended: false };
     if (!generationOwnsLockSync(expectedGeneration)) {
-      // A superseded owner that still holds only its own uncommitted
-      // reservation never owned the delivery: force its record out so the
-      // unread row is redelivered by the lock owner. Every other case keeps the
-      // conservative rollback, because the record may be the only durable copy
-      // of a note a replacement already adopted and read.
-      const marker = readReservation(row.seq);
-      const supersededPending = marker?.status === "reserved" && marker.deliveryId === deliveryId;
-      rollbackDeliveryEntry(row.seq, currentMainSession.getSessionFile(), customType, deliveryId, supersededPending);
-      // The append was flushed, so one durable record for the sequence always
-      // remains: either ours (kept because it is the only copy) or a sibling
-      // that replaced it. Name the marker with that survivor.
+      // This owner lost the fence, but its record is already durable. It keeps
+      // it and a replacement adopts it; a lost fence never deletes a durable
+      // record. The corrected contract permits an already-authorized in-flight
+      // delivery to finish and be adopted after takeover, because deleting the
+      // only copy here is a real loss, and the delivery path is never allowed
+      // to destroy a record. The marker reservation still serializes the
+      // reserve -> append -> commit section, so no other owner can append a
+      // competing record for this sequence.
       const surviving = scanDurableDelivery(row, customType, parseRecord);
       return surviving.state === "durable"
         ? { ok: false, durable: true, deliveryId: surviving.deliveryId, appended: false }

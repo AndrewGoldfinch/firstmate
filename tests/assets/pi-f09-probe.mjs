@@ -451,14 +451,15 @@ exec "$FM_F09_BASH" "$@"
       first.child.kill("SIGCONT");
       const stale = observe(home, "old-owner-resumes-after-replacement", await blocked);
       assert.notEqual(stale.pid, stale.lockPid);
-      // The superseded owner must not keep an appended or rendered record
-      // after the successor took over: it rolls its own durable entry back out
-      // of the session model and disk and releases the reservation, leaving
-      // the row unread for the lock owner to deliver.
-      assert.equal(stale.memoryRecords, 0, "a superseded owner must not append or render a record after takeover");
-      assert.equal(stale.diskRecords, 0, "a superseded owner must not leave a durable record after takeover");
+      // Corrected contract: a lost fence never deletes a durable record. The
+      // superseded owner's already-appended record stays on disk and its
+      // reservation is committed, so a replacement adopts it rather than
+      // destroying the only copy; the row stays unread for the lock owner.
+      assert.equal(stale.memoryRecords, 1, "a superseded owner keeps the durable record it appended");
+      assert.equal(stale.renderedCopies, 1, "the visible delivery event survives the takeover");
+      assert.equal(stale.diskRecords, 1, "a superseded owner must not delete its durable record after takeover");
       assert.equal(stale.unread, 1);
-      assert.equal(stale.deliveryMarkers, 0, "a superseded owner must release its reservation");
+      assert.equal(stale.deliveryMarkers, 1, "the reservation is committed, not destroyed");
       await kill(first);
       await kill(second);
       // Reopen the same destination to adopt the durable record and finish.
@@ -469,6 +470,57 @@ exec "$FM_F09_BASH" "$@"
       assert.equal(settled.unread, 0);
       assert.equal(settled.deliveryMarkers, 0);
       await kill(third);
+    }
+    {
+      const home = setup("adv-commit-race");
+      const stale = await launch(home);
+      grant(home, stale);
+      // The stale owner stops (real SIGSTOP) after its durable append, so its
+      // record is on disk behind a still-reserved marker.
+      await stale.request("pause-after-write");
+      const staleBlocked = stale.request("start");
+      staleBlocked.catch(() => {});
+      let appended = false;
+      for (let i = 0; i < 300; i++) {
+        const status = execFileSync("ps", ["-o", "stat=", "-p", String(stale.child.pid)], { encoding: "utf8" });
+        if (fs.existsSync(join(home, "after-write")) && status.trim().startsWith("T")) { appended = true; break; }
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      assert.ok(appended, "the stale owner must stop after appending its durable record");
+      // The replacement opens the same session file after that append, loads
+      // the record into its in-memory model, and stops inside its commit write
+      // before the marker names a committed delivery.
+      const replacement = await launch(home);
+      grant(home, replacement);
+      await replacement.request("pause-before-marker-write");
+      const replacementBlocked = replacement.request("start");
+      replacementBlocked.catch(() => {});
+      let committing = false;
+      for (let i = 0; i < 300; i++) {
+        const status = execFileSync("ps", ["-o", "stat=", "-p", String(replacement.child.pid)], { encoding: "utf8" });
+        if (status.trim().startsWith("T")) { committing = true; break; }
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      assert.ok(committing, "the replacement must stop between the reservation read and the committed marker");
+      // Resume the stale owner first: it re-checks ownership, sees it has lost
+      // the fence, and must not delete the durable record it just appended.
+      stale.child.kill("SIGCONT");
+      const staleAfter = observe(home, "stale-owner-resumes-before-commit", await staleBlocked);
+      assert.equal(staleAfter.memoryRecords, 1, "a lost fence must never delete the durable record");
+      assert.equal(staleAfter.renderedCopies, 1, "the visible delivery event must survive the race");
+      assert.equal(staleAfter.diskRecords, 1, "a lost fence must never delete the durable record");
+      // Resume the replacement: it commits the marker and adopts the surviving
+      // record instead of delivering from memory alone, so the cursor crosses
+      // only a record that is on disk.
+      replacement.child.kill("SIGCONT");
+      const settled = observe(home, "replacement-commits-after-race", await replacementBlocked);
+      assert.equal(settled.diskRecords, 1, "the race must leave exactly one durable record");
+      assert.equal(settled.destinationRecords, 1, "the destination must keep the durable record");
+      assert.equal(settled.unread, 0, "the surviving durable record lets the cursor complete");
+      assert.equal(settled.deliveryMarkers, 0);
+      assert.equal(settled.cursor, 1);
+      await kill(stale);
+      await kill(replacement);
     }
     {
       const home = setup("takeover-after-append-before-commit");
@@ -610,6 +662,7 @@ exec "$FM_F09_BASH" "$@"
       failAck(home);
       const winner = observe(home, "successor-reclaims-first", await second.request("start"));
       assert.equal(winner.diskRecords, 1, "the successor must reclaim and deliver exactly once");
+      assert.equal(winner.renderedCopies, 1, "the winner's delivery is visible");
       assert.equal(winner.unread, 1);
       assert.equal(winner.deliveryMarkers, 1);
       const winnerMarker = JSON.parse(fs.readFileSync(join(markerDir, "1"), "utf8"));
@@ -620,6 +673,7 @@ exec "$FM_F09_BASH" "$@"
       first.child.kill("SIGCONT");
       const clobbered = observe(home, "first-reclaimer-resumes", await blocked);
       assert.equal(clobbered.diskRecords, 1, "a resumed reclaimer must not leave two winners");
+      assert.equal(clobbered.renderedCopies, 0, "a reclaimer that lost the race must not render a delivery");
       assert.equal(clobbered.unread, 1);
       assert.equal(clobbered.deliveryMarkers, 1);
       const settledMarker = JSON.parse(fs.readFileSync(join(markerDir, "1"), "utf8"));
