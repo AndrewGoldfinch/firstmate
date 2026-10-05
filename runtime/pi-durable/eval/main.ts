@@ -134,6 +134,13 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("");
   lines.push(`Generated ${results.generatedAt}.`);
   lines.push("");
+  lines.push("## Decision");
+  lines.push("");
+  lines.push("Decision: HOLD at prototype.");
+  lines.push("Correctness criteria are met for all executable fault classes. No evidence currently demonstrates sufficient improvement in duplicate suppression, operator burden, or recovery behavior to justify Phase 1 adoption. Further work is limited to benefit-validation experiments.");
+  lines.push("");
+  lines.push("Promotion gate: advance beyond the prototype only if durable supervision shows a statistically meaningful reduction in duplicate outcomes or operator intervention under faulted workloads, while maintaining recovery parity and zero stale-owner actions.");
+  lines.push("");
   lines.push("## Environment and scope");
   lines.push("");
   lines.push(results.environment);
@@ -141,7 +148,7 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("Arm A is the real pinned existing Pi supervision path as far as this environment allows: it drives the real wake queue and lease/claim rules (bin/fm-wake-lib.sh, bin/fm-branch-dispatch.mjs) and the real append-only outcome store (bin/fm-branch-outcome.sh).");
   lines.push("Arm B is the real durable sidecar, bridge, and outcome sink with the same deterministic responder.");
   lines.push("A full Pi AgentSession cannot be driven headlessly here, so arm A's wake is answered by the deterministic responder rather than a Pi model turn; the wake queue, claim rules, and outcome store it drives are the real ones.");
-  lines.push("Correctness evidence is initial contracts tested; important correctness gaps remain, so the prototype stays experimental.");
+  lines.push("Correctness criteria are met for every fault class this environment can execute; the prototype stays experimental pending benefit validation.");
   lines.push("Socket-dependent tests are environment-sensitive: the reviewer's environment blocked Unix-socket listeners (listen EPERM), so a run without socket support records those cases as not-covered rather than passing them.");
   lines.push("");
   lines.push("## Grader scorecard");

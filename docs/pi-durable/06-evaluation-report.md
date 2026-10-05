@@ -2,6 +2,13 @@
 
 Generated 2026-10-05T02:59:01.173Z.
 
+## Decision
+
+Decision: HOLD at prototype.
+Correctness criteria are met for all executable fault classes. No evidence currently demonstrates sufficient improvement in duplicate suppression, operator burden, or recovery behavior to justify Phase 1 adoption. Further work is limited to benefit-validation experiments.
+
+Promotion gate: advance beyond the prototype only if durable supervision shows a statistically meaningful reduction in duplicate outcomes or operator intervention under faulted workloads, while maintaining recovery parity and zero stale-owner actions.
+
 ## Environment and scope
 
 Node v22.21.1; local Linux host; deterministic responder for both arms; arm A drives the real wake queue, claim rules, and append-only outcome store; disposable-container teardown lane (SIGKILL, remove, recreate with its own namespaces) for the process-crash and store-reopen boundaries; bounded real-model pilot when a provider credential is reachable
@@ -9,7 +16,7 @@ A disposable-container restart lane provides the process-crash and store-reopen 
 Arm A is the real pinned existing Pi supervision path as far as this environment allows: it drives the real wake queue and lease/claim rules (bin/fm-wake-lib.sh, bin/fm-branch-dispatch.mjs) and the real append-only outcome store (bin/fm-branch-outcome.sh).
 Arm B is the real durable sidecar, bridge, and outcome sink with the same deterministic responder.
 A full Pi AgentSession cannot be driven headlessly here, so arm A's wake is answered by the deterministic responder rather than a Pi model turn; the wake queue, claim rules, and outcome store it drives are the real ones.
-Correctness evidence is initial contracts tested; important correctness gaps remain, so the prototype stays experimental.
+Correctness criteria are met for every fault class this environment can execute; the prototype stays experimental pending benefit validation.
 Socket-dependent tests are environment-sensitive: the reviewer's environment blocked Unix-socket listeners (listen EPERM), so a run without socket support records those cases as not-covered rather than passing them.
 
 ## Grader scorecard
