@@ -11,16 +11,19 @@ Two layers, named apart from now on:
 | --- | --- |
 | Prototype 0 — Durable Outcome persistence | **Complete.** Claim proven; frozen; no further work on append dedup. |
 | Spike 1 — make real-path F09 reproducible | **Complete.** See [`development.md`](development.md) "Spike 1 — real-path F09 reproduction"; the real Pi reconcile path reproduces F09 headlessly (`tests/fm-pi-branch-extension.test.sh`). |
-| Prototype 1 — Durable Delivery boundary | **Verified (ADVANCE).** After five fix/verify iterations the delivery boundary is exactly-once across the documented F09 crash windows; see [`21-reservation-verify.md`](21-reservation-verify.md). |
-| Phase 1 adoption | **Gate met; captain call held** (`pi-durable-phase1-promotion`). Documented residuals: free-running multi-process races untested; a committed reservation whose recorded-destination record is externally destroyed strands. |
+| Prototype 1 — Durable Delivery boundary | **HOLD - IMPLEMENTATION (targeted hardening).** The reservation-recovery loss is fixed, but a source review found the ADVANCE claims exceed the evidence: the takeover test does not forbid a stale append, reclaim is a read-compare-write (not atomic CAS), and a crash inside a marker write can leave an empty marker that strands a note. |
+| Phase 1 adoption | **Held.** Gate not met: the milestone's full live-model/terminal/lock-acquisition/host-reboot fidelity is not established, and the three hardening checks above are pending. |
 
-## Prototype 1 — Durable Delivery boundary (verified)
+## Prototype 1 — Durable Delivery boundary (HOLD, targeted hardening)
 
 Durable delivery identity for routine notes is opt-in (`FM_PI_DURABLE_DELIVERY`): a routine note stores its own delivery record keyed by store `seq`, so a reload finds it and delivers nothing again; a sequence match with different content fails closed; the default path is unchanged.
 
-**Verified (ADVANCE).** Five fix/verify iterations closed the delivery-boundary defects, each found by an independent real-SDK adversarial pass: streaming persistence (`11`/`12`), home-wide identity + flush-durable guard (`14`/`15`), adoption-safe rollback (`16`/`17`), reserve-before-append (`18`/`19`), and finally a recoverable `reserved → committed` reservation (`20`). Verification `21-reservation-verify.md` returns ADVANCE: every documented crash window recovers to exactly one durable record with no loss and no duplicate, the stale-owner fence holds, concurrent reclaim is CAS-guarded, reconcile is idempotent, and the default/frozen surfaces are unchanged.
+**Status: HOLD - IMPLEMENTATION.** Five fix/verify iterations closed real defects, and the reservation-recovery loss is fixed (pre-fix falsification `0 !== 1`; `21-reservation-verify.md` returns ADVANCE on the tested schedules). A subsequent source review found the ADVANCE claims exceed that evidence, and the targeted hardening checks are now required before promotion:
+- **stale-owner append:** the takeover test asserts ownership changed, not that a stale owner is forbidden to append — make the assertion enforce the original invariant, and fix the code if a stale append is possible;
+- **reclaim atomicity:** `reclaimReservation` reads, compares, then separately overwrites the marker (not atomic CAS); make it atomic or lock-serialized, with a probe forcing takeover between the compare and the overwrite;
+- **marker-write crashes:** markers are written with a direct `writeFileSync`; a crash between creation/truncation and the JSON write can leave an empty marker that strands the note. Make marker writes atomic (temp + rename) or repair empty markers, with a deterministic crash probe.
 
-Documented residuals: free-running multi-process races are untested (the probe forces interleavings with real `SIGKILL`/`SIGSTOP`); a committed reservation whose recorded-destination record is externally destroyed strands (no duplicate/loss of a live record); legacy bare/empty markers inherit that strand.
+Documented residuals (unchanged): free-running multi-process races untested; a committed reservation whose recorded-destination record is externally destroyed strands; legacy bare/empty markers inherit that strand.
 
 ## Prototype 0 — Durable Outcome persistence (complete)
 
