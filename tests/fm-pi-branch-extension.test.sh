@@ -6457,7 +6457,16 @@ await fire("agent_start", {});
 await fire("turn_end", {}, replacement);
 if (durableCopies(replacementEntries, summary) !== 0) throw new Error(`the replacement destination re-delivered the note: ${durableCopies(replacementEntries, summary)}`);
 if (durableCopies(mainEntries, summary) !== 1) throw new Error("the original delivery changed");
-if (outcomeScript(["unread"]) !== "") throw new Error("the replacement destination did not complete the cursor");
+// A different destination holds no record of its own, so it defers rather
+// than advancing the cursor past an unverified delivery.
+if (outcomeScript(["unread"]) === "") throw new Error("the replacement destination advanced an unverified cursor");
+// The original destination still holds the durable record; reopening it adopts
+// the note and completes the cursor exactly once.
+await fire("session_start", {}, defaultSessionCtx);
+await fire("agent_start", {});
+await fire("turn_end", {}, defaultSessionCtx);
+if (outcomeScript(["unread"]) !== "") throw new Error("the original destination did not complete the cursor after the replacement deferred");
+if (durableCopies(mainEntries, summary) !== 1) throw new Error("completing the cursor changed the original delivery");
 process.exit(0);
 EOF
   status=$?

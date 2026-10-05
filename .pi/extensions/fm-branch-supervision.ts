@@ -1157,6 +1157,30 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  // Release only the reservation this owner created, identified by its content,
+  // so a failure after reserving never strands a marker and never removes a
+  // winner's marker.
+  function releaseReservation(seq: number, reservedId: string): void {
+    if (readCommittedDeliveryId(seq) !== reservedId) return;
+    try {
+      rmSync(deliveredMarkerPath(seq), { force: true });
+    } catch {
+      // Best effort; a stranded reservation defers a later owner, never duplicates.
+    }
+  }
+
+  // Name an owned reservation with the identity of the record that actually
+  // survived, so a later reader can tell a committed record from a sibling.
+  function claimReservationId(seq: number, reservedId: string, deliveryId: string): void {
+    if (readCommittedDeliveryId(seq) !== reservedId) return;
+    try {
+      writeFileSync(deliveredMarkerPath(seq), deliveryId, { mode: 0o600 });
+    } catch {
+      // Best effort; the marker keeps the reserved identity, which still marks
+      // the sequence delivered.
+    }
+  }
+
   function clearDelivery(seq: number): void {
     try {
       rmSync(deliveredMarkerPath(seq), { force: true });
@@ -1186,52 +1210,67 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  // Locate this session's record for one sequence. "durable" means Pi has
+  // flushed it to disk; "pending" is a matching in-memory record that is not
+  // yet durable, which is deferred rather than re-appended.
+  function scanDurableDelivery(
+    row: OutcomeRow,
+    customType: string,
+    parseRecord: (value: unknown) => OutcomeRow | null,
+  ): { state: "conflict" | "pending" | "none" } | { state: "durable"; deliveryId: string | null } {
+    if (!currentMainSession) return { state: "none" };
+    let matched = false;
+    let matchedId: string | null = null;
+    for (const entry of currentMainSession.getEntries()) {
+      if (entry.type !== "custom" || entry.customType !== customType) continue;
+      const recorded = parseRecord(entry.data);
+      if (!recorded || recorded.seq !== row.seq) continue;
+      if (!sameOutcome(recorded, row)) return { state: "conflict" };
+      matched = true;
+      const candidate = (entry.data as { deliveryId?: unknown }).deliveryId;
+      if (typeof candidate === "string") matchedId = candidate;
+    }
+    if (!matched) return { state: "none" };
+    return sessionFlushed(currentMainSession) ? { state: "durable", deliveryId: matchedId } : { state: "pending" };
+  }
+
   // Append one sequence-keyed delivery record and prove it durable before its
-  // caller may advance the read cursor. Returns the deliveryId of a record this
-  // call appended, null when a durable match already existed, or ok:false when
-  // nothing durable was recorded. A stale owner that appended before losing
-  // ownership removes its own record again.
+  // caller may advance the read cursor. `reservedId` is the home-wide identity
+  // the caller already claimed; a durable match returns its own identity so the
+  // caller can name the marker with the record that actually survived. `durable`
+  // is true whenever a flushed record for the sequence remains, which is what
+  // lets a fence-losing owner keep its claim without a competing append.
   function appendDurableOutcome(
     row: OutcomeRow,
     customType: string,
     parseRecord: (value: unknown) => OutcomeRow | null,
     expectedGeneration: number,
-  ): { ok: true; deliveryId: string | null; appended: boolean } | { ok: false } {
-    if (!currentMainSession) return { ok: false };
-    let matchedId: string | null = null;
-    let matched = false;
-    for (const entry of currentMainSession.getEntries()) {
-      if (entry.type !== "custom" || entry.customType !== customType) continue;
-      const recorded = parseRecord(entry.data);
-      if (!recorded || recorded.seq !== row.seq) continue;
-      if (!sameOutcome(recorded, row)) return { ok: false };
-      matched = true;
-      const candidate = (entry.data as { deliveryId?: unknown }).deliveryId;
-      if (typeof candidate === "string") matchedId = candidate;
-    }
-    if (matched) {
-      // A matching record is durable only once Pi has flushed the session;
-      // until then it is deferred, never re-appended, so the phantom cannot
-      // accumulate while the session has no conversation. A replacement that
-      // adopts this record adopts its deliveryId too, so the rollback guard can
-      // recognize the committed delivery as already recorded.
-      return sessionFlushed(currentMainSession)
-        ? { ok: true, deliveryId: matchedId, appended: false }
-        : { ok: false };
-    }
-    const deliveryId = randomUUID();
+    reservedId?: string,
+  ): { ok: boolean; durable: boolean; deliveryId: string | null; appended: boolean } {
+    if (!currentMainSession) return { ok: false, durable: false, deliveryId: null, appended: false };
+    const existing = scanDurableDelivery(row, customType, parseRecord);
+    if (existing.state === "conflict") return { ok: false, durable: false, deliveryId: null, appended: false };
+    if (existing.state === "durable") return { ok: true, durable: true, deliveryId: existing.deliveryId, appended: false };
+    if (existing.state === "pending") return { ok: false, durable: false, deliveryId: null, appended: false };
+    const deliveryId = reservedId ?? randomUUID();
     try {
       pi.appendEntry(customType, { version: 1, ...row, deliveryId });
     } catch {
       unpoisonSessionEntry(currentMainSession, customType, deliveryId);
-      return { ok: false };
+      return { ok: false, durable: false, deliveryId: null, appended: false };
     }
-    if (!sessionFlushed(currentMainSession)) return { ok: false };
+    if (!sessionFlushed(currentMainSession)) return { ok: false, durable: false, deliveryId: null, appended: false };
     if (!generationOwnsLockSync(expectedGeneration)) {
       rollbackDeliveryEntry(row.seq, currentMainSession.getSessionFile(), customType, deliveryId);
-      return { ok: false };
+      // The append was flushed, so one durable record for the sequence always
+      // remains: either ours (kept because it is the only copy) or a sibling
+      // that replaced it. Name the marker with that survivor.
+      const surviving = scanDurableDelivery(row, customType, parseRecord);
+      return surviving.state === "durable"
+        ? { ok: false, durable: true, deliveryId: surviving.deliveryId, appended: false }
+        : { ok: false, durable: false, deliveryId: null, appended: false };
     }
-    return { ok: true, deliveryId, appended: true };
+    return { ok: true, durable: true, deliveryId, appended: true };
   }
 
   // A captain outcome is delivered by a durable, rendered session entry, not
@@ -1265,19 +1304,58 @@ export default function (pi: ExtensionAPI) {
   // again. The home-wide marker additionally lets a REPLACED destination
   // recognize the note as already delivered rather than delivering it a second
   // time. A conflicting record for one sequence fails closed.
+  // Adopt a delivery a competing owner already claimed: only when this session
+  // holds the flushed record, so the cursor never advances past a delivery that
+  // has no durable record on disk. An orphan sibling of the committed identity
+  // is rolled back instead.
+  function adoptDurableDelivery(row: OutcomeRow): boolean {
+    if (!currentMainSession) return false;
+    const existing = scanDurableDelivery(row, VISIBLE_ROUTINE_ENTRY_TYPE, parseRoutineDeliveryRecord);
+    if (existing.state !== "durable") return false;
+    const committed = readCommittedDeliveryId(row.seq);
+    if (existing.deliveryId && committed && committed !== existing.deliveryId) {
+      // Our record is a losing sibling of the committed delivery: remove it and
+      // let the committed owner finish.
+      rollbackDeliveryEntry(row.seq, currentMainSession.getSessionFile(), VISIBLE_ROUTINE_ENTRY_TYPE, existing.deliveryId);
+      return false;
+    }
+    return true;
+  }
+
   function ensureRoutineOutcome(row: OutcomeRow, expectedGeneration: number): boolean {
     if (!currentMainSession || row.verdict !== "routine") return false;
-    if (deliveryCommitted(row.seq)) return true;
-    const delivered = appendDurableOutcome(row, VISIBLE_ROUTINE_ENTRY_TYPE, parseRoutineDeliveryRecord, expectedGeneration);
-    if (!delivered.ok) return false;
-    // Claim the home-wide identity for a durable delivery, whether this call
-    // appended it or recognized an already-durable match. A lost claim means
-    // another owner committed first; only our own just-appended record is
-    // rolled back, and only while a sibling copy survives, so the home keeps
-    // exactly one copy.
-    if (!commitDelivery(row.seq, delivered.deliveryId) && delivered.appended && delivered.deliveryId) {
-      rollbackDeliveryEntry(row.seq, currentMainSession.getSessionFile(), VISIBLE_ROUTINE_ENTRY_TYPE, delivered.deliveryId);
+    if (deliveryCommitted(row.seq)) return adoptDurableDelivery(row);
+    // Reserve the home-wide delivery identity BEFORE writing the record, with
+    // O_EXCL deciding the single winner. A destination that loses the race sees
+    // a winner's marker and never appends a competing durable record, which is
+    // what keeps one committed note to one home-wide delivery even when two
+    // destinations reconcile the same unread row.
+    const reservedId = randomUUID();
+    if (!commitDelivery(row.seq, reservedId)) {
+      // A marker already exists for a competing delivery; adopt it only if this
+      // session holds its record. A ledger that cannot be written at all fails
+      // closed and leaves the row unread rather than claiming a delivery.
+      return deliveryCommitted(row.seq) ? adoptDurableDelivery(row) : false;
+    }
+    const delivered = appendDurableOutcome(row, VISIBLE_ROUTINE_ENTRY_TYPE, parseRoutineDeliveryRecord, expectedGeneration, reservedId);
+    if (!delivered.ok) {
+      if (delivered.durable) {
+        // The record survived even though this owner lost the fence: name the
+        // marker with the surviving identity and keep the delivery.
+        if (delivered.deliveryId && delivered.deliveryId !== reservedId) {
+          claimReservationId(row.seq, reservedId, delivered.deliveryId);
+        }
+        return true;
+      }
+      // No durable record was written: release the reservation so the row stays
+      // recoverable instead of stranding a marker with nothing behind it.
+      releaseReservation(row.seq, reservedId);
       return false;
+    }
+    // The record may have been an already-durable match rather than the one
+    // this call appended; name the marker with the surviving identity.
+    if (delivered.deliveryId && delivered.deliveryId !== reservedId) {
+      claimReservationId(row.seq, reservedId, delivered.deliveryId);
     }
     return true;
   }
