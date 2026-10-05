@@ -469,6 +469,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/20-reservation-recovery.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
