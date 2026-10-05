@@ -425,6 +425,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/09-phase1-plan.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
