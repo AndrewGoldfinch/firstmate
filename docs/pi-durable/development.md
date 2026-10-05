@@ -177,3 +177,37 @@ FM_TEST_END 2026-10-05T05:35:15Z tests/fm-pi-branch-extension.test.sh exit=0 dur
 
 Both subjects pass (`exit=0`, 53 subjects, ~62 s wall).
 The real Pi path is therefore drivable headlessly, so there is no reduced-model blocker and Prototype 1's promotion gate can be evaluated against this signal.
+
+## Prototype 1 - durable delivery identity (2026-10-05)
+
+The opt-in durable delivery identity is selected by `FM_PI_DURABLE_DELIVERY=1`.
+Under it a routine note is delivered exactly like a captain outcome: a sequence-keyed record appended synchronously as a session entry (`VISIBLE_ROUTINE_ENTRY_TYPE`), found again by store sequence on reload, and rendered by a registered entry renderer.
+Because the record is written before `mark-read`, the read cursor can only cross a delivery that is already durable.
+
+Independent adversarial verification of commit `3d8cf6c4` returned **HOLD - IMPLEMENTATION** (the report was delivered separately and is not part of this branch).
+The first implementation stored the record in the `details` of the custom message that performed the delivery.
+On the real Pi path `pi.sendMessage(..., { deliverAs: "nextTurn" })` only queues that message in `_pendingNextTurnMessages`; the `custom_message` session entry is written when the next prompt flushes the queue.
+Every `turn_end` reconcile runs while main is still streaming, so `ensureRoutineOutcome` could not see the queued record, delivered a second copy, and advanced `mark-read` over an in-memory delivery.
+A crash after the successful `mark-read` and before the flush then lost the note.
+The shipped fixture persisted synchronously for every `sendMessage`, so it could not observe any of this.
+
+The fix mirrors the captain path: the routine delivery record is now a synchronous `pi.appendEntry` custom entry rather than a deferred `custom_message` `details` payload, and `ensureRoutineOutcome` verifies it is persisted before returning true.
+A changed routine record for the same sequence still fails closed; a silent routine outcome records its identity without rendering.
+The default (flag-off) presentation path is byte-identical: the same `fm-branch-merge` custom message with no `details`.
+
+`tests/fm-pi-branch-extension.test.sh` now models Pi's deferral: a `deliverAs: "nextTurn"` message is queued in memory and persisted only by `flushPendingNextTurn()`, so the streaming half of the F09 window is observable.
+`test_f09_durable_delivery_identity_streaming_neither_duplicates_nor_loses` runs the whole scenario with `mainStreaming` true: delivery succeeds, the `mark-read` persistence fails, replay does not duplicate, a queue flush changes nothing, recovery advances the cursor, and a genuinely new main session neither re-presents an acknowledged note (it was already delivered) nor drops an unread one (it is re-presented there).
+The F09 exactly-once and replay/takeover cases also run with main streaming.
+
+```sh
+bin/fm-test-run.sh tests/fm-pi-branch-extension.test.sh
+```
+
+```
+FM_TEST_BEGIN 2026-10-05T06:26:44Z tests/fm-pi-branch-extension.test.sh family=standalone expected_gate_skip=none
+...
+ok - durable delivery identity makes a committed routine note exactly once while the existing path duplicates
+ok - durable delivery identity keeps one delivery across repeated ack failure, replay, and takeover, and separates sequences
+ok - streaming durable delivery stays exactly once across a failed ack, a queue flush, and a new session
+FM_TEST_END 2026-10-05T06:27:47Z tests/fm-pi-branch-extension.test.sh exit=0 duration_ms=63080 gate_skip=false
+```
