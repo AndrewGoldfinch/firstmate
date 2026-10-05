@@ -4,8 +4,8 @@ Generated 2026-10-05T03:44:48.592Z.
 
 ## Decision
 
-Decision: HOLD pending adversarial verification; Phase 1 adoption remains a captain call.
-The reduced-model benefit experiment demonstrates duplicate-outcome avoidance (30/30 runs duplicated for the existing-path model vs 0/30 for the durable arm). This is strong evidence for the mechanism, but it rests on a reduced Arm A, so the promotion gate stays closed until an independent adversarial verification confirms Arm A fidelity, equivalent fault placement, and ledger accuracy, and fails to produce an Arm B duplicate across expanded crash interleavings.
+Decision: HOLD - EVIDENCE. Independent adversarial verification returned HOLD - EVIDENCE (report: docs/pi-durable/08-benefit-verification.md); Phase 1 adoption remains a captain call.
+The reduced-model benefit experiment demonstrates duplicate-outcome avoidance (30/30 runs duplicated for the existing-path model vs 0/30 for the durable arm), and the verification's causal control confirms the mechanism (same store: operation key present -> one row, absent -> two). No legal interleaving produced an Arm B duplicate. But verification also found the promotion evidence overstated: the arm-B effect ledger is gated on the implementation's own replay flag and under-records an applied effect; the operator-burden clause is the duplicate count recounted; the stale-owner check is vacuous; the measured duplicate is append re-insertion, not the documented routine-note delivery limitation; and the real Pi path is UNDRIVABLE here, carried as an explicit residual risk into Phase 1.
 
 Decision rule: advance to Phase 1 if and only if the adversarial verifier confirms Arm A fidelity, equivalent fault placement, and ledger accuracy, and fails to produce a duplicate in Arm B across expanded crash interleavings. Operator-burden reduction is inferred from duplicate elimination rather than independently measured, and is not a second required benefit. Recovery time is an observation, not a claimed benefit.
 

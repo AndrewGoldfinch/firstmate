@@ -421,6 +421,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/08-benefit-verification.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
