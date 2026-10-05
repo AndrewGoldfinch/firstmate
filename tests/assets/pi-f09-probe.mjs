@@ -280,6 +280,14 @@ exec "$FM_F09_BASH" "$@"
       assert.equal(failed.unread, 1);
       assert.equal(failed.deliveryMarkers, 0);
       assert.deepEqual(failed.ioErrors, ["EACCES"], "the real session write must be denied by the OS");
+      // Re-run reconciliation in this same rolled-back process. A surviving
+      // in-memory phantom would let the boundary claim a home-wide marker with
+      // no durable record behind it; the rollback must have removed it.
+      const repeated = observe(home, "reconcile-after-rollback", await first.request("retry"));
+      assert.equal(repeated.memoryRecords, 0, "the rolled-back record must not survive in memory");
+      assert.equal(repeated.diskRecords, 0);
+      assert.equal(repeated.unread, 1, "the note must stay recoverable rather than be falsely delivered");
+      assert.equal(repeated.deliveryMarkers, 0, "no marker may exist without a durable record");
       // The denied append is retried for real once the file is writable again:
       // the durable record lands exactly once and only then does the cursor
       // cross it.
@@ -298,6 +306,62 @@ exec "$FM_F09_BASH" "$@"
       await kill(second);
     }
     {
+      const home = setup("double-destination-append");
+      const first = await launch(home);
+      const second = await launch(home, { destination: "replacement" });
+      grant(home, first);
+      await first.request("pause-after-write");
+      const blocked = first.request("start");
+      blocked.catch(() => {});
+      // Destination A stops (real SIGSTOP) after its durable append, so its
+      // home-wide reservation is committed and its record is on disk.
+      let appended = false;
+      for (let i = 0; i < 300; i++) {
+        const status = execFileSync("ps", ["-o", "stat=", "-p", String(first.child.pid)], { encoding: "utf8" });
+        if (fs.existsSync(join(home, "after-write")) && status.trim().startsWith("T")) { appended = true; break; }
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      assert.ok(appended, "destination A must stop after appending its durable record");
+      assert.equal(readJsonl(first.ready.sessionFile).filter(isNote).length, 1,
+        "destination A's append is durable before the commit");
+      // Destination B opens a different session file and reconciles the same
+      // unread row. Under the fixed protocol it sees A's reservation and never
+      // appends a competing record.
+      grant(home, second);
+      await second.request("pause-after-write");
+      let secondDone = false;
+      const secondStart = second.request("start").then((value) => { secondDone = true; return value; });
+      secondStart.catch(() => {});
+      let secondStopped = false;
+      for (let i = 0; i < 100 && !secondDone; i++) {
+        const status = execFileSync("ps", ["-o", "stat=", "-p", String(second.child.pid)], { encoding: "utf8" });
+        if (status.trim().startsWith("T")) { secondStopped = true; break; }
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      if (secondStopped) second.child.kill("SIGCONT");
+      if (!secondDone) await secondStart;
+      // Resume the stopped owner and let both destinations settle.
+      first.child.kill("SIGCONT");
+      await blocked;
+      const after = observe(home, "double-destination-settled", await second.request("snapshot"));
+      // One committed note yields one durable home-wide delivery even though
+      // two destinations reconciled it from different session files.
+      assert.equal(after.diskRecords, 1, "two destinations must produce exactly one durable record");
+      assert.equal(after.unread, 1);
+      assert.equal(after.deliveryMarkers, 1);
+      await kill(first);
+      await kill(second);
+      // The winning destination's record is still the home-wide delivery;
+      // reopening it adopts the record and completes the cursor.
+      const third = await launch(home);
+      grant(home, third);
+      const settled = observe(home, "cursor-completes-on-reopen", await third.request("start"));
+      assert.equal(settled.diskRecords, 1);
+      assert.equal(settled.unread, 0);
+      assert.equal(settled.deliveryMarkers, 0);
+      await kill(third);
+    }
+    {
       const home = setup("new-destination-before-ack");
       const first = await launch(home);
       grant(home, first);
@@ -309,14 +373,25 @@ exec "$FM_F09_BASH" "$@"
       await kill(first);
       const second = await launch(home, { destination: "replacement" });
       grant(home, second);
-      const after = observe(home, "delivered-in-replacement-destination", await second.request("start"));
-      // One committed note is one home-wide delivery: the replacement recognizes
-      // it by identity, renders nothing new, and only completes the cursor.
+      const after = observe(home, "replacement-defers-to-reservation", await second.request("start"));
+      // One committed note is one home-wide delivery: the replacement sees the
+      // reservation but holds no record of its own, so it defers and writes
+      // nothing rather than appending a competing copy or advancing the cursor
+      // past an unverified delivery.
       assert.equal(after.diskRecords, 1);
       assert.equal(after.renderedCopies, 0);
-      assert.equal(after.unread, 0);
-      assert.equal(after.deliveryMarkers, 0);
+      assert.equal(after.unread, 1);
+      assert.equal(after.deliveryMarkers, 1);
       await kill(second);
+      // The original destination still holds the durable home-wide delivery;
+      // reopening it adopts the record and completes the cursor.
+      const third = await launch(home);
+      grant(home, third);
+      const recovered = observe(home, "original-destination-completes-cursor", await third.request("start"));
+      assert.equal(recovered.diskRecords, 1);
+      assert.equal(recovered.unread, 0);
+      assert.equal(recovered.deliveryMarkers, 0);
+      await kill(third);
     }
     {
       const home = setup("takeover-at-destination-write");
@@ -342,22 +417,30 @@ exec "$FM_F09_BASH" "$@"
       }
       assert.ok(stopped, "old consumer must reach the real destination-write barrier");
       grant(home, second);
-      const coreReplacement = observe(home, "replacement-delivers-while-old-stopped", await second.request("start"));
-      assert.equal(coreReplacement.diskRecords, 1);
-      assert.equal(coreReplacement.renderedCopies, 1);
-      assert.equal(coreReplacement.unread, 0);
-      assert.equal(coreReplacement.deliveryMarkers, 0);
+      const coreReplacement = observe(home, "replacement-defers-to-reservation", await second.request("start"));
+      // The stopped owner reserved the home-wide identity before its write, so
+      // the replacement holds no record and must not claim the delivery.
+      assert.equal(coreReplacement.diskRecords, 0);
+      assert.equal(coreReplacement.unread, 1);
+      assert.equal(coreReplacement.deliveryMarkers, 1);
       first.child.kill("SIGCONT");
       const stale = observe(home, "old-owner-resumes-after-replacement", await blocked);
       assert.notEqual(stale.pid, stale.lockPid);
-      // The stale owner lost the delivery fence and removed its own duplicate;
-      // the home keeps exactly one recorded delivery.
+      // The stopped owner's own record is the only durable copy and survives the
+      // resume; the home keeps exactly one recorded delivery.
       assert.equal(stale.diskRecords, 1);
-      assert.equal(stale.renderedCopies, 1);
-      assert.equal(stale.unread, 0);
-      assert.equal(stale.deliveryMarkers, 0);
+      assert.equal(stale.unread, 1);
+      assert.equal(stale.deliveryMarkers, 1);
       await kill(first);
       await kill(second);
+      // Reopen the same destination to adopt the durable record and finish.
+      const third = await launch(home);
+      grant(home, third);
+      const settled = observe(home, "cursor-completes-on-reopen", await third.request("start"));
+      assert.equal(settled.diskRecords, 1);
+      assert.equal(settled.unread, 0);
+      assert.equal(settled.deliveryMarkers, 0);
+      await kill(third);
     }
     {
       const home = setup("takeover-after-append-before-commit");
@@ -418,7 +501,7 @@ exec "$FM_F09_BASH" "$@"
     report.verdict = "PASS";
     save();
     for (const row of observations.filter((row) => row.scenario)) console.log(JSON.stringify(row));
-    console.log("F09_PROBE_COMPLETE verdict=PASS; one committed note is one home-wide delivery across restart, destination replacement, stale-owner takeover, and adoption before commit");
+    console.log("F09_PROBE_COMPLETE verdict=PASS; one committed note is one home-wide delivery across restart, destination replacement, stale-owner takeover, adoption before commit, and a double-destination append race");
   } catch (error) {
     report.verdict = "PROBE_FAILED";
     report.error = error.stack;
