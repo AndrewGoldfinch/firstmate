@@ -5859,6 +5859,84 @@ EOF
   pass "a failed cursor write re-delivers a routine note exactly once more while a captain outcome stays deduplicated"
 }
 
+test_f09_durable_committed_routine_row_is_re_presented_across_cursor_failure() {
+  local repo home fakebin out status real_bash
+  repo="$TMP_ROOT/f09-durable-committed-root"
+  home="$TMP_ROOT/f09-durable-committed-home"
+  fakebin="$home/fakebin"
+  real_bash=$(command -v bash)
+  mkdir -p "$home/state" "$home/config" "$fakebin"
+  install_pi_branch_extension_fixture "$repo"
+  cat > "$fakebin/bash" <<'SH'
+#!/bin/sh
+armed=$(cat "$FM_TEST_FAIL_ARM" 2>/dev/null || printf '')
+if [ -n "$armed" ] && [ "$1" = "$FM_TEST_OUTCOME_SCRIPT" ] && [ "$2" = "$armed" ]; then
+  : > "$FM_TEST_FAIL_ARM"
+  echo "injected cursor-write failure" >&2
+  exit 9
+fi
+exec "$FM_TEST_REAL_BASH" "$@"
+SH
+  chmod +x "$fakebin/bash"
+  PATH="$fakebin:$PATH" PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_TEST_REAL_BASH="$real_bash" FM_TEST_OUTCOME_SCRIPT="$ROOT/bin/fm-branch-outcome.sh" \
+    FM_TEST_FAIL_ARM="$home/state/f09-durable-fail-arm" DRIVER_PRELUDE="$DRIVER_PRELUDE" \
+    node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
+const prelude = process.env.DRIVER_PRELUDE;
+await eval(`(async () => { ${prelude}; globalThis.__t = { fire, outcomeScript, sentToMain, defaultSessionCtx }; })()`);
+const { fire, outcomeScript, sentToMain, defaultSessionCtx } = globalThis.__t;
+import { writeFileSync } from "node:fs";
+
+const failArm = process.env.FM_TEST_FAIL_ARM;
+const armStoreFailure = (subcommand) => writeFileSync(failArm, subcommand);
+const storedRows = () => outcomeScript(["list", "--recent", "50"]).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+const routineCopies = (summary) => sentToMain.filter(
+  (sent) => sent.message.customType === "fm-branch-merge" && sent.message.content.includes(summary),
+).length;
+
+await fire("session_start", {}, defaultSessionCtx);
+
+// A durable outcome commit, exactly as the durable execution provider's outcome
+// sink records one (runtime/pi-durable/src/outcome-sink.ts shells out to the
+// same store): one routine row, before any presentation happens and independent
+// of the in-process report tool that delivers on the existing path.
+const summary = "durable-committed routine note under a failed cursor write";
+outcomeScript(["append", "--task", "fleet", "--verdict", "routine", "--summary", summary]);
+if (storedRows().length !== 1) throw new Error("the durable commit did not record exactly one routine row");
+
+// The committed row is presented, then its cursor write fails.
+armStoreFailure("mark-read");
+await fire("turn_end", {}, defaultSessionCtx);
+if (routineCopies(summary) !== 1) {
+  throw new Error(`the durable-committed routine row was not presented exactly once before the cursor failure: ${routineCopies(summary)}`);
+}
+if (outcomeScript(["unread"]) === "") throw new Error("a failed cursor write still marked the durable-committed row read");
+if (storedRows().length !== 1) throw new Error("the failed cursor write changed the stored row");
+
+// The next reconciliation re-presents the same durable-committed row: the F09
+// delivery gap is a property of the shared presentation consumer, not of how
+// the row was committed.
+armStoreFailure("");
+await fire("turn_end", {}, defaultSessionCtx);
+if (routineCopies(summary) !== 2) {
+  throw new Error(`recovery did not re-present the durable-committed row exactly once more: ${routineCopies(summary)}`);
+}
+if (outcomeScript(["unread"]) !== "") throw new Error("recovery did not advance the cursor past the durable-committed row");
+if (storedRows().length !== 1) throw new Error("recovery changed the stored durable-committed row");
+
+// Once the cursor is past it, no further reconciliation re-presents it.
+await fire("turn_end", {}, defaultSessionCtx);
+if (routineCopies(summary) !== 2) {
+  throw new Error(`the durable-committed row kept being re-presented after the cursor advanced: ${routineCopies(summary)}`);
+}
+process.exit(0);
+EOF
+  status=$?
+  out=$(cat "$TMP_ROOT/node-output")
+  expect_code 0 "$status" "a durable-committed routine row must be re-presented once across a failed cursor write: $out"
+  pass "a durable-committed routine row is re-presented once across a failed cursor write, then stays read"
+}
+
 test_extension_registered_provider_resolves_in_the_branch() {
   local repo home out status
   repo="$TMP_ROOT/extprov-root"
@@ -6040,4 +6118,5 @@ test_delivery_keeps_the_event_loop_live_and_ordered
 test_session_replacement_during_delivery_neither_loses_nor_duplicates
 test_store_failure_during_delivery_neither_loses_nor_duplicates
 test_mark_read_failure_keeps_routine_redelivery_and_captain_deduplication
+test_f09_durable_committed_routine_row_is_re_presented_across_cursor_failure
 test_durable_provider_selection_routes_through_the_bridge

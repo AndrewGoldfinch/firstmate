@@ -10,7 +10,7 @@ Two layers, named apart from now on:
 | Stage | State |
 | --- | --- |
 | Prototype 0 — Durable Outcome persistence | **Complete.** Claim proven; frozen; no further work on append dedup. |
-| Spike 1 — make real-path F09 reproducible | **Next.** |
+| Spike 1 — make real-path F09 reproducible | **Complete.** See [`development.md`](development.md) "Spike 1 — real-path F09 reproduction". |
 | Prototype 1 — Durable Delivery boundary | Conditional on Spike 1 succeeding. |
 | Phase 1 adoption | Gated on adversarial real-path F09 elimination. |
 

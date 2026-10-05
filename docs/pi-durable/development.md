@@ -148,3 +148,32 @@ Both arms pass the no-fault fleet; a fault at one task makes the reduced existin
 The four grader negative controls are all rejected.
 F05, F09, F11, F12, F16, and F17 are explicitly not covered (no read-tool boundary, no cancellation operation, no real credential provider, no VM or reboot boundary); F07 is a known reconciliation gap.
 The full results and limitations are in [`06-evaluation-report.md`](06-evaluation-report.md).
+
+## Spike 1 — real-path F09 reproduction (2026-10-05)
+
+Spike 1 retires the real-Pi-fidelity residual risk for F09: the exact sequence `routine note delivered -> cursor write fails -> note stays unread -> re-presented on retry` is driven through the real Pi supervision extension (`.pi/extensions/fm-branch-supervision.ts`, `reconcileUnreadOutcomes` -> `deliverRoutineOutcome` -> `mark-read`), not the `runtime/pi-durable/eval/` reduced model.
+The Pi SDK is stubbed at the message boundary exactly as every case in `tests/fm-pi-branch-extension.test.sh` already does; the extension, `bin/fm-branch-outcome.sh`, and the reconcile/deliver/mark-read logic all run for real.
+The fault is injected at the one boundary that owns it: a `PATH` shim for `bash` that fails the armed `fm-branch-outcome.sh` subcommand (`mark-read`) once.
+No extension production behavior changes and no Prototype 1 durable delivery identity is introduced.
+
+Two cases pin the sequence.
+The pre-existing `test_mark_read_failure_keeps_routine_redelivery_and_captain_deduplication` covers the default in-process path: a routine note is delivered once, the cursor write fails leaving the row unread, and the next reconciliation delivers the same logical note again before the cursor advances and the duplication window closes; a captain row stays deduplicated.
+The new `test_f09_durable_committed_routine_row_is_re_presented_across_cursor_failure` covers the durable-committed arm that the corrected benefit verification left unmodeled (`10-benefit-verification-2.md`, clause 5): a routine row is committed first through the durable outcome sink (`runtime/pi-durable/src/outcome-sink.ts` uses the same `bin/fm-branch-outcome.sh`) before any presentation, and the shared reconcile consumer re-presents it after the cursor write fails.
+That shows the F09 duplicate is a property of the shared presentation consumer, not of the append mechanism, so a durable-committed row is subject to it exactly like an existing-path row.
+
+Commands and observed result (worktree root, 2026-10-05):
+
+```sh
+bin/fm-test-run.sh tests/fm-pi-branch-extension.test.sh
+```
+
+```
+FM_TEST_BEGIN 2026-10-05T05:34:14Z tests/fm-pi-branch-extension.test.sh family=standalone expected_gate_skip=none
+...
+ok - a failed cursor write re-delivers a routine note exactly once more while a captain outcome stays deduplicated
+ok - a durable-committed routine row is re-presented once across a failed cursor write, then stays read
+FM_TEST_END 2026-10-05T05:35:15Z tests/fm-pi-branch-extension.test.sh exit=0 duration_ms=61858 gate_skip=false
+```
+
+Both subjects pass (`exit=0`, 53 subjects, ~62 s wall).
+The real Pi path is therefore drivable headlessly, so there is no reduced-model blocker and Prototype 1's promotion gate can be evaluated against this signal.
