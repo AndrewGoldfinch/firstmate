@@ -11,22 +11,16 @@ Two layers, named apart from now on:
 | --- | --- |
 | Prototype 0 — Durable Outcome persistence | **Complete.** Claim proven; frozen; no further work on append dedup. |
 | Spike 1 — make real-path F09 reproducible | **Complete.** See [`development.md`](development.md) "Spike 1 — real-path F09 reproduction"; the real Pi reconcile path reproduces F09 headlessly (`tests/fm-pi-branch-extension.test.sh`). |
-| Prototype 1 — Durable Delivery boundary | **HOLD - IMPLEMENTATION under the end-to-end invariants.** The real-SDK probe confirms same-file F09 recovery, but reproduces lost delivery and a stale-owner append after takeover; see [`13-real-sdk-delivery-probe.md`](13-real-sdk-delivery-probe.md). |
-| Phase 1 adoption | **Dormant.** The prior conditional ADVANCE did not establish no-loss or concurrent-takeover safety; the new probe leaves those gates unsatisfied. |
+| Prototype 1 — Durable Delivery boundary | **Verified (ADVANCE).** After five fix/verify iterations the delivery boundary is exactly-once across the documented F09 crash windows; see [`21-reservation-verify.md`](21-reservation-verify.md). |
+| Phase 1 adoption | **Gate met; captain call held** (`pi-durable-phase1-promotion`). Documented residuals: free-running multi-process races untested; a committed reservation whose recorded-destination record is externally destroyed strands. |
 
-## Prototype 1 — Durable Delivery boundary (conditional verification superseded)
+## Prototype 1 — Durable Delivery boundary (verified)
 
 Durable delivery identity for routine notes is opt-in (`FM_PI_DURABLE_DELIVERY`): a routine note stores its own delivery record keyed by store `seq`, so a reload finds it and delivers nothing again; a sequence match with different content fails closed; the default path is unchanged.
 
-**HOLD - IMPLEMENTATION (streaming).** Independent verification (`11-delivery-verification.md`) found that on the real Pi path a reconcile during main's streaming turn uses `pi.sendMessage(..., { deliverAs: "nextTurn" })`, which queues the message in memory until the next prompt flush. The session entry is therefore not yet persisted, `ensureRoutineOutcome` cannot see it, re-delivers, and then advances `mark-read` — duplicating the note and, on a crash after the ack, losing it. The shipped fixture persisted synchronously so it could not observe this.
+**Verified (ADVANCE).** Five fix/verify iterations closed the delivery-boundary defects, each found by an independent real-SDK adversarial pass: streaming persistence (`11`/`12`), home-wide identity + flush-durable guard (`14`/`15`), adoption-safe rollback (`16`/`17`), reserve-before-append (`18`/`19`), and finally a recoverable `reserved → committed` reservation (`20`). Verification `21-reservation-verify.md` returns ADVANCE: every documented crash window recovers to exactly one durable record with no loss and no duplicate, the stale-owner fence holds, concurrent reclaim is CAS-guarded, reconcile is idempotent, and the default/frozen surfaces are unchanged.
 
-**Fix:** the routine delivery record is now a synchronous `appendEntry` (mirroring the captain visible-outcome path), persisted before `mark-read` can cross it, with its own entry renderer (`44714b57`). Independent re-verification (`12-delivery-verification-2.md`) returns **ADVANCE**: with normal persistence the F09 window delivers exactly once with no duplicate and no loss, the deferred queue is unused, the default path is unchanged, and conflicts fail closed.
-
-**Current evidence:** the real-SDK probe confirms both persistence-loss paths and demonstrates that an old consumer paused after its ownership check can append and render after a replacement delivers to the same session file.
-A replacement session also receives another copy if the original delivery's cursor write failed.
-These are delivery-boundary defects or unresolved destination semantics, not outcome-append defects.
-The smallest follow-up requirements and experiment limits are recorded in [`13-real-sdk-delivery-probe.md`](13-real-sdk-delivery-probe.md).
-No delivery fix or Phase 1 activation is included in that probe.
+Documented residuals: free-running multi-process races are untested (the probe forces interleavings with real `SIGKILL`/`SIGSTOP`); a committed reservation whose recorded-destination record is externally destroyed strands (no duplicate/loss of a live record); legacy bare/empty markers inherit that strand.
 
 ## Prototype 0 — Durable Outcome persistence (complete)
 

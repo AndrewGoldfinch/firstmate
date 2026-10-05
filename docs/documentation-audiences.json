@@ -473,6 +473,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/21-reservation-verify.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
