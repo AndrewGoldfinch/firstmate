@@ -445,6 +445,14 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/14-delivery-boundary-fix.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/pi-durable/15-delivery-fixes-verification.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
