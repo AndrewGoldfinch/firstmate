@@ -10,9 +10,17 @@ Two layers, named apart from now on:
 | Stage | State |
 | --- | --- |
 | Prototype 0 — Durable Outcome persistence | **Complete.** Claim proven; frozen; no further work on append dedup. |
-| Spike 1 — make real-path F09 reproducible | **Complete.** See [`development.md`](development.md) "Spike 1 — real-path F09 reproduction". |
-| Prototype 1 — Durable Delivery boundary | Conditional on Spike 1 succeeding. |
+| Spike 1 — make real-path F09 reproducible | **Complete.** See [`development.md`](development.md) "Spike 1 — real-path F09 reproduction"; the real Pi reconcile path reproduces F09 headlessly (`tests/fm-pi-branch-extension.test.sh`). |
+| Prototype 1 — Durable Delivery boundary | **Implemented, HOLD - IMPLEMENTATION.** Durable delivery identity landed (`3d8cf6c4`), but independent verification (`11-delivery-verification.md`) found the streaming defect below; fix in progress. |
 | Phase 1 adoption | Gated on adversarial real-path F09 elimination. |
+
+## Prototype 1 — Durable Delivery boundary (implemented; under fix)
+
+Durable delivery identity for routine notes is opt-in (`FM_PI_DURABLE_DELIVERY`): a routine note stores its own delivery record keyed by store `seq`, so a reload finds it and delivers nothing again; a sequence match with different content fails closed; the default path is unchanged.
+
+**HOLD - IMPLEMENTATION (streaming).** Independent verification (`11-delivery-verification.md`) found that on the real Pi path a reconcile during main's streaming turn uses `pi.sendMessage(..., { deliverAs: "nextTurn" })`, which queues the message in memory until the next prompt flush. The session entry is therefore not yet persisted, `ensureRoutineOutcome` cannot see it, re-delivers, and then advances `mark-read` — duplicating the note and, on a crash after the ack, losing it. The shipped fixture persisted synchronously so it could not observe this.
+
+Fix in progress: make the routine delivery record durable **before** the cursor advances (synchronous append keyed by `seq`, or refuse to advance `mark-read` while the delivery is only queued), and extend the fixture to model `nextTurn` deferral and re-run F09 with `mainStreaming` true.
 
 ## Prototype 0 — Durable Outcome persistence (complete)
 
