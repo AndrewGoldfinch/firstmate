@@ -9,6 +9,8 @@ The reduced-model benefit experiment demonstrates duplicate-outcome avoidance (3
 
 Decision rule: advance to Phase 1 if and only if the adversarial verifier confirms Arm A fidelity, equivalent fault placement, and ledger accuracy, and fails to produce a duplicate in Arm B across expanded crash interleavings. Operator-burden reduction is inferred from duplicate elimination rather than independently measured, and is not a second required benefit. Recovery time is an observation, not a claimed benefit.
 
+The verifier's final state is exactly one of ADVANCE (no Arm B duplicate and the causal control behaves as expected), HOLD - IMPLEMENTATION (a durability/interleaving defect), or HOLD - EVIDENCE (Arm A fidelity or real-path applicability insufficiently demonstrated). An undrivable real Pi path is recorded as an explicit residual risk carried into Phase 1, never an automatic pass.
+
 ## Environment and scope
 
 Node v22.21.1; local Linux host; deterministic responder for both arms; arm A drives the real wake queue, claim rules, and append-only outcome store; disposable-container teardown lane (SIGKILL, remove, recreate with its own namespaces) for the process-crash and store-reopen boundaries; bounded real-model pilot when a provider credential is reachable

@@ -149,6 +149,7 @@ export function renderReport(results: EvaluationResults): string {
   );
   lines.push("");
   lines.push("Decision rule: advance to Phase 1 if and only if the adversarial verifier confirms Arm A fidelity, equivalent fault placement, and ledger accuracy, and fails to produce a duplicate in Arm B across expanded crash interleavings. Operator-burden reduction is inferred from duplicate elimination rather than independently measured, and is not a second required benefit. Recovery time is an observation, not a claimed benefit.");
+  lines.push("The verifier's final state is exactly one of ADVANCE (no Arm B duplicate and the causal control behaves as expected), HOLD - IMPLEMENTATION (a durability/interleaving defect), or HOLD - EVIDENCE (Arm A fidelity or real-path applicability insufficiently demonstrated). An undrivable real Pi path is recorded as an explicit residual risk carried into Phase 1, never an automatic pass.");
   lines.push("");
   lines.push("## Environment and scope");
   lines.push("");
