@@ -461,6 +461,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/18-double-destination-exactly-once.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
