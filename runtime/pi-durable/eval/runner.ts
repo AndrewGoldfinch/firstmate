@@ -72,6 +72,11 @@ export type DurableScenarioInput = {
   respond?: Responder;
   /** Barrier name that crashes the owner once. */
   crashAt?: string;
+  /**
+   * Task whose owner crashes after the operation has settled but before its
+   * effect is acknowledged, so the retry must replay without a second effect.
+   */
+  crashAfterSettleTask?: string;
 };
 
 /** Run one scenario through the durable arm. */
@@ -137,14 +142,19 @@ export async function runDurableScenario(input: DurableScenarioInput): Promise<A
         { transport },
         { operationId, prompt: `supervise ${task.id}`, payload: { task: task.id, rows: task.acceptedRows } },
       );
-      ledger.apply(`outcome:${task.id}`, task.id, "branch");
+      if (!result.replayed) ledger.apply(`outcome:${task.id}`, task.id, "branch");
       notes.push(`${task.id}: seq=${result.seq} replayed=${result.replayed}`);
       settled = true;
+      if (input.crashAfterSettleTask === task.id) {
+        faults.push(`pi-durable owner lost ${task.id} after settlement`);
+        notes.push(`${task.id}: settled; the retry must replay without a second effect`);
+        settled = false;
+      }
     } catch (error) {
       faults.push(error instanceof Error ? error.message : String(error));
     }
 
-    if (!settled && input.crashAt) {
+    if (!settled && (input.crashAt || input.crashAfterSettleTask)) {
       // Recover: reopen the owner on the same store and retry the same ID.
       await sidecar.stop();
       sidecar = await startSidecar();
@@ -154,7 +164,7 @@ export async function runDurableScenario(input: DurableScenarioInput): Promise<A
           { transport },
           { operationId, prompt: `supervise ${task.id}`, payload: { task: task.id, rows: task.acceptedRows } },
         );
-        ledger.apply(`outcome:${task.id}`, task.id, "branch");
+        if (!result.replayed) ledger.apply(`outcome:${task.id}`, task.id, "branch");
         notes.push(`${task.id}: recovered seq=${result.seq} replayed=${result.replayed}`);
       } catch (error) {
         notes.push(`${task.id}: unresolved after recovery (${error instanceof Error ? error.message : String(error)})`);
@@ -205,6 +215,12 @@ export type ExistingScenarioInput = {
   respond?: Responder;
   /** Task whose in-process execution is interrupted before its outcome. */
   crashAtTask?: string;
+  /**
+   * Task whose outcome is appended and then the owner is lost before the wake
+   * row is pruned, so the restarted owner re-claims and appends it again. The
+   * existing path has no operation key, so the append is not idempotent.
+   */
+  crashAfterEffectTask?: string;
 };
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -293,7 +309,7 @@ export async function runExistingScenario(input: ExistingScenarioInput): Promise
     input.tasks.map((task) => [task.id, task.planted] as const),
   );
 
-  let crashArmed = input.crashAtTask !== undefined;
+  let crashArmed = input.crashAtTask !== undefined || input.crashAfterEffectTask !== undefined;
   for (let round = 0; round < 2; round += 1) {
     const scope = wakeScope(input.home);
     if (scope.status !== "safe") break;
@@ -317,6 +333,13 @@ export async function runExistingScenario(input: ExistingScenarioInput): Promise
         state: "settled",
         receiptSeq: seq,
       });
+      if (crashArmed && taskId === input.crashAfterEffectTask) {
+        crashArmed = false;
+        crashed = true;
+        faults.push(`existing owner lost ${taskId} after its outcome was appended`);
+        notes.push(`${taskId}: effect applied, wake row left queued after the crash`);
+        break;
+      }
       if (round > 0) notes.push(`${task.id}: recovered on the restarted owner`);
       toPrune.push(task.id);
     }

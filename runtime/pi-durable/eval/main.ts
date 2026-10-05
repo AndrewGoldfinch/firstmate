@@ -18,6 +18,7 @@ import { runMatrix, type MatrixCaseResult } from "./matrix.ts";
 import { runDockerLane, type DockerLaneResult } from "./docker-lane.ts";
 import { runPilot, type PilotResult } from "./pilot.ts";
 import { runCalibration, type CalibrationResult } from "./calibrate.ts";
+import { runBenefit, type BenefitResult } from "./benefit.ts";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const outcomeScript = join(repoRoot, "bin", "fm-branch-outcome.sh");
@@ -44,6 +45,7 @@ export type EvaluationResults = {
   dockerLane: DockerLaneResult;
   pilot: PilotResult;
   calibration: CalibrationResult;
+  benefit: BenefitResult;
   /** The reviewer's recommended end-to-end verification and its environment note. */
   verification: {
     milestone: string;
@@ -97,6 +99,7 @@ export async function runEvaluation(workDir = mkdtempSync(join(tmpdir(), "fm-pi-
   const dockerLane = await runDockerLane();
   const pilot = await runPilot(workDir, outcomeScript);
   const calibration = await runCalibration(workDir, outcomeScript);
+  const benefit = await runBenefit(workDir, outcomeScript);
   const matrix = await runMatrix({ workDir, outcomeScript, dockerLane, pilot });
 
   return {
@@ -109,6 +112,7 @@ export async function runEvaluation(workDir = mkdtempSync(join(tmpdir(), "fm-pi-
     dockerLane,
     pilot,
     calibration,
+    benefit,
     verification: {
       milestone:
         "two successive wakes, an execution crash with resume, and an ownership replacement through the extension's durable-branch path and the real sidecar; exactly one outcome per accepted operation, no stale append, distinct identities (runtime/pi-durable/tests/milestone.test.ts)",
@@ -136,8 +140,13 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("");
   lines.push("## Decision");
   lines.push("");
-  lines.push("Decision: HOLD at prototype.");
-  lines.push("Correctness criteria are met for all executable fault classes. No evidence currently demonstrates sufficient improvement in duplicate suppression, operator burden, or recovery behavior to justify Phase 1 adoption. Further work is limited to benefit-validation experiments.");
+  const gate = results.benefit.promotionGate;
+  lines.push(`Decision: ${gate.verdict === "advance" ? "advance beyond the prototype; Phase 1 adoption remains a captain call" : "HOLD at prototype"}.`);
+  lines.push(
+    gate.verdict === "advance"
+      ? "Benefit validation cleared the promotion gate: durable supervision showed a statistically meaningful reduction in duplicate outcomes or operator intervention under the faulted workload, with recovery parity and zero stale-owner actions."
+      : "Correctness criteria are met for all executable fault classes, but the benefit-validation evidence does not show a statistically meaningful reduction in duplicate outcomes or operator intervention under the faulted workload, so the prototype stays on hold.",
+  );
   lines.push("");
   lines.push("Promotion gate: advance beyond the prototype only if durable supervision shows a statistically meaningful reduction in duplicate outcomes or operator intervention under faulted workloads, while maintaining recovery parity and zero stale-owner actions.");
   lines.push("");
@@ -213,6 +222,45 @@ export function renderReport(results: EvaluationResults): string {
     }
   }
   lines.push("");
+  lines.push("## Benefit validation (promotion gate)");
+  lines.push("");
+  const benefit = results.benefit;
+  lines.push(
+    `Status: ${benefit.status}${benefit.reason ? ` (${benefit.reason})` : ` over ${benefit.runs} paired runs`}. Predeclared N: ${benefit.runs}.`,
+  );
+  lines.push(`Scenario: ${benefit.predeclared.scenario}.`);
+  lines.push(`Fault: ${benefit.predeclared.fault}.`);
+  lines.push("Predeclared operator interventions:");
+  for (const intervention of benefit.predeclared.interventions) lines.push(`- ${intervention}`);
+  lines.push("");
+  const percent = (value: number) => `${Math.round(value * 1000) / 10}%`;
+  lines.push("| Experiment | Arm A existing | Arm B pi-durable | Difference (A - B) | Verdict |");
+  lines.push("| --- | --- | --- | --- | --- |");
+  lines.push(
+    `| Duplicate-outcome avoidance | ${benefit.duplicateOutcomes.existingTotal} duplicates in ${benefit.duplicateOutcomes.existing.successes}/${benefit.runs} runs (${percent(benefit.duplicateOutcomes.existing.rate)}, 95% CI ${percent(benefit.duplicateOutcomes.existing.lower)}-${percent(benefit.duplicateOutcomes.existing.upper)}) | ${benefit.duplicateOutcomes.durableTotal} duplicates in ${benefit.duplicateOutcomes.durable.successes}/${benefit.runs} runs (${percent(benefit.duplicateOutcomes.durable.rate)}, 95% CI ${percent(benefit.duplicateOutcomes.durable.lower)}-${percent(benefit.duplicateOutcomes.durable.upper)}) | ${percent(benefit.duplicateOutcomes.difference.rate)} points, 95% CI ${percent(benefit.duplicateOutcomes.difference.lower)}-${percent(benefit.duplicateOutcomes.difference.upper)} | ${benefit.duplicateOutcomes.verdict} |`,
+  );
+  lines.push(
+    `| Operator burden | ${benefit.operatorBurden.existing.interventions} interventions / ${benefit.operatorBurden.existing.commands} commands; ${benefit.operatorBurden.existingRunsWithIntervention.successes}/${benefit.runs} runs affected (${percent(benefit.operatorBurden.existingRunsWithIntervention.rate)}, 95% CI ${percent(benefit.operatorBurden.existingRunsWithIntervention.lower)}-${percent(benefit.operatorBurden.existingRunsWithIntervention.upper)}) | ${benefit.operatorBurden.durable.interventions} interventions / ${benefit.operatorBurden.durable.commands} commands; ${benefit.operatorBurden.durableRunsWithIntervention.successes}/${benefit.runs} runs affected (${percent(benefit.operatorBurden.durableRunsWithIntervention.rate)}, 95% CI ${percent(benefit.operatorBurden.durableRunsWithIntervention.lower)}-${percent(benefit.operatorBurden.durableRunsWithIntervention.upper)}) | ${percent(benefit.operatorBurden.difference.rate)} points, 95% CI ${percent(benefit.operatorBurden.difference.lower)}-${percent(benefit.operatorBurden.difference.upper)} | ${benefit.operatorBurden.verdict} |`,
+  );
+  lines.push(
+    `| Recovery time | median ${Math.round(benefit.recoveryTime.existingFaulted.median)} ms (range ${Math.round(benefit.recoveryTime.existingFaulted.min)}-${Math.round(benefit.recoveryTime.existingFaulted.max)}) | median ${Math.round(benefit.recoveryTime.durableFaulted.median)} ms (range ${Math.round(benefit.recoveryTime.durableFaulted.min)}-${Math.round(benefit.recoveryTime.durableFaulted.max)}) | ${percent(benefit.recoveryTime.medianReductionPercent / 100)} lower, threshold ${benefit.recoveryTime.thresholdPercent}% from a ${benefit.recoveryTime.noiseFloorPercent}% noise floor | ${benefit.recoveryTime.verdict} |`,
+  );
+  lines.push("");
+  lines.push(
+    `Promotion gate: duplicate reduction ${benefit.promotionGate.duplicateReduction ? "yes" : "no"}, operator reduction ${benefit.promotionGate.operatorReduction ? "yes" : "no"}, recovery parity ${benefit.promotionGate.recoveryParity ? "yes" : "no"}, zero stale-owner actions ${benefit.promotionGate.zeroStaleOwnerActions ? "yes" : "no"} -> ${benefit.promotionGate.verdict === "advance" ? "CLEARED, advance beyond the prototype" : "NOT cleared, keep the HOLD decision"}.`,
+  );
+  lines.push("");
+  lines.push("| Run | Arm A faulted (ms) | Arm B faulted (ms) | Arm A duplicates | Arm B duplicates | Arm A interventions | Arm B interventions |");
+  lines.push("| --- | --- | --- | --- | --- | --- | --- |");
+  for (const sample of benefit.samples) {
+    lines.push(
+      `| ${sample.run} | ${Math.round(sample.existingFaultedMs)} | ${Math.round(sample.durableFaultedMs)} | ${sample.existingDuplicateEffects} | ${sample.durableDuplicateEffects} | ${sample.existingInterventions} | ${sample.durableInterventions} |`,
+    );
+  }
+  lines.push("");
+  lines.push("Benefit-validation limits:");
+  for (const limit of benefit.limits) lines.push(`- ${limit}.`);
+  lines.push("");
   lines.push("## Benefit scorecard (deterministic, calibrated)");
   lines.push("");
   lines.push("| Benefit | Metric | Arm A | Arm B | Status |");
@@ -221,7 +269,7 @@ export function renderReport(results: EvaluationResults): string {
     `| Reliable recovery | Correct dispositions / fleet tasks | ${results.grades.existing.passed ? "all" : "some"} | ${results.grades["pi-durable"].passed ? "all" : "some"} | ${results.grades["pi-durable"].passed ? "parity" : "unproven"} |`,
   );
   lines.push(
-    `| Safe retries | Outcome rows after a fault (total counts, not a duplicate check) | ${results.arms.existingWithFault.trace.outcomes.length} outcomes for 6 tasks | ${results.arms["pi-durableWithFault"].trace.outcomes.length} outcomes for 6 tasks | unproven |`,
+    `| Safe retries | Duplicate applied effects (paired fault runs) | ${results.benefit.duplicateOutcomes.existingTotal} | ${results.benefit.duplicateOutcomes.durableTotal} | ${results.benefit.duplicateOutcomes.verdict} |`,
   );
   lines.push(
     `| Controlled ownership | Stale-owner actions | ${results.arms.existing.trace.effects.filter((effect) => !results.arms.existing.trace.allowedOwners.includes(effect.owner)).length} | ${results.arms["pi-durable"].trace.effects.filter((effect) => !results.arms["pi-durable"].trace.allowedOwners.includes(effect.owner)).length} | pass |`,
@@ -230,10 +278,10 @@ export function renderReport(results: EvaluationResults): string {
     `| Useful visibility | Recoverable settlements | n/a | ${results.arms["pi-durable"].trace.operations.filter((operation) => operation.state === "settled").length} | pass |`,
   );
   lines.push(
-    `| Reduced recovery burden | Recorded faults on the faulted fleet (not operator actions) | ${results.arms.existingWithFault.faults.length} | ${results.arms["pi-durableWithFault"].faults.length} | ${results.calibration.verdicts.manualActions} |`,
+    `| Reduced recovery burden | Operator interventions under the predeclared rule | ${results.benefit.operatorBurden.existing.interventions} | ${results.benefit.operatorBurden.durable.interventions} | ${results.benefit.operatorBurden.verdict} |`,
   );
   lines.push(
-    `| Faster recovery | Median faulted-scenario time (ms) | ${Math.round(results.calibration.medians.existingWithFault)} | ${Math.round(results.calibration.medians.piDurableWithFault)} | ${results.calibration.verdicts.recoveryTime} |`,
+    `| Faster recovery | Median faulted-scenario time (ms) | ${Math.round(results.benefit.recoveryTime.existingFaulted.median)} | ${Math.round(results.benefit.recoveryTime.durableFaulted.median)} | ${results.benefit.recoveryTime.verdict} |`,
   );
   lines.push("");
   lines.push("## Threshold calibration");
@@ -253,6 +301,9 @@ export function renderReport(results: EvaluationResults): string {
   lines.push(`Basis: ${results.calibration.thresholds.basis}.`);
   lines.push(
     `Verdicts: manual recovery actions ${results.calibration.verdicts.manualActions}, recovery time ${results.calibration.verdicts.recoveryTime}, duplicate outcomes ${results.calibration.verdicts.duplicateOutcomes}.`,
+  );
+  lines.push(
+    "These verdicts apply only to the legacy proxy metrics above; the promotion gate is decided by the paired benefit validation.",
   );
   lines.push("");
   lines.push("## Measurement limits");
@@ -279,7 +330,7 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("- Arm A is not a full Pi AgentSession: the wake is answered by the deterministic responder instead of a Pi model turn, so the extension's model-side behavior is not exercised; the wake queue, claim rules, and outcome store it drives are the real ones.");
   lines.push("- The deterministic responder returns fixture truth, so this harness measures execution durability, not model judgment.");
   lines.push("- F09 is exercised against the real store: a routine note has no durable idempotent record, so a failed cursor write re-presents the already-delivered row. The limitation is pinned by the targeted test and tracked as follow-up `fm-pi-routine-delivery-idempotency-followup-r1`.");
-  lines.push("- The outcome sink is keyed by the operation identity with an atomic append-or-return-existing, so two distinct operations with identical text no longer collide; the evaluation's duplicate-outcome comparison still only subtracts total outcome counts between arms and does not establish the absence of duplicates.");
+  lines.push("- The outcome sink is keyed by the operation identity with an atomic append-or-return-existing, so two distinct operations with identical text no longer collide; the paired benefit validation measures duplicate applied effects directly with the non-idempotent ledger, and arm A's operation-key-less append duplicates on the post-effect fault while arm B replays without a second effect.");
   lines.push("- The recreate container runs in its own pid namespace, so the recorded owner pid is not a reliable liveness signal there and the lane reclaims the stale ownership lock explicitly before starting it.");
   lines.push("- The container lane is a container and process boundary, not an OS reboot: it proves the store reopens and the recorded authority reconciles after a teardown + recreate, not that a kernel or filesystem failure is survivable.");
   lines.push("- The pilot's answers vary between runs, so its disposition match count is one sample rather than a rate.");
