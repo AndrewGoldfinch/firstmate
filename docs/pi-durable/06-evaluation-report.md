@@ -1,13 +1,13 @@
 # Pi Durable evaluation report (P2)
 
-Generated 2026-10-05T03:29:42.725Z.
+Generated 2026-10-05T03:44:48.592Z.
 
 ## Decision
 
-Decision: advance beyond the prototype; Phase 1 adoption remains a captain call.
-Benefit validation cleared the promotion gate: durable supervision showed a statistically meaningful reduction in duplicate outcomes or operator intervention under the faulted workload, with recovery parity and zero stale-owner actions.
+Decision: HOLD pending adversarial verification; Phase 1 adoption remains a captain call.
+The reduced-model benefit experiment demonstrates duplicate-outcome avoidance (30/30 runs duplicated for the existing-path model vs 0/30 for the durable arm). This is strong evidence for the mechanism, but it rests on a reduced Arm A, so the promotion gate stays closed until an independent adversarial verification confirms Arm A fidelity, equivalent fault placement, and ledger accuracy, and fails to produce an Arm B duplicate across expanded crash interleavings.
 
-Promotion gate: advance beyond the prototype only if durable supervision shows a statistically meaningful reduction in duplicate outcomes or operator intervention under faulted workloads, while maintaining recovery parity and zero stale-owner actions.
+Decision rule: advance to Phase 1 if and only if the adversarial verifier confirms Arm A fidelity, equivalent fault placement, and ledger accuracy, and fails to produce a duplicate in Arm B across expanded crash interleavings. Operator-burden reduction is inferred from duplicate elimination rather than independently measured, and is not a second required benefit. Recovery time is an observation, not a claimed benefit.
 
 ## Environment and scope
 
@@ -67,28 +67,28 @@ Image: fm-pi-durable-lane:local; Docker server: 29.8.2.
 The failure boundary - SIGKILL, remove, and recreate with fresh namespaces - is owned by the host, outside the container.
 
 ```sh
-docker run -d --name <lane> --rm --user 1000:1000 -e FM_HOME=/home -v /home/andy/.treehouse/firstmate-pi-durable-18cae0/1/firstmate-pi-durable:/repo:ro -v <workdir>/home:/home -w /repo/runtime/pi-durable fm-pi-durable-lane:local node eval/docker-lane-container.ts serve /home /repo/bin/fm-branch-outcome.sh
+docker run -d --name <lane> --rm --user 1000:1000 -e FM_HOME=/home -v /home/andy/dev/firstmate:/repo:ro -v <workdir>/home:/home -w /repo/runtime/pi-durable fm-pi-durable-lane:local node eval/docker-lane-container.ts serve /home /repo/bin/fm-branch-outcome.sh
 ```
 
 ```sh
-docker run --rm --user 1000:1000 -e FM_HOME=/home -v /home/andy/.treehouse/firstmate-pi-durable-18cae0/1/firstmate-pi-durable:/repo:ro -v <workdir>/home:/home -w /repo/runtime/pi-durable fm-pi-durable-lane:local node eval/docker-lane-container.ts verify /home /repo/bin/fm-branch-outcome.sh
+docker run --rm --user 1000:1000 -e FM_HOME=/home -v /home/andy/dev/firstmate:/repo:ro -v <workdir>/home:/home -w /repo/runtime/pi-durable fm-pi-durable-lane:local node eval/docker-lane-container.ts verify /home /repo/bin/fm-branch-outcome.sh
 ```
 
 ## Bounded real-model pilot
 
 Status: pass.
-Provider opencode-go, model muse-spark-1.3-contributor; 6 calls in 17803 ms with 0 timeouts.
+Provider opencode-go, model muse-spark-1.3-contributor; 6 calls in 12220 ms with 0 timeouts.
 Both arms ran against the same real model answers, so the arms differ only in execution durability; arm A completed=true, arm B completed=true.
 The model matched the fixture's required disposition on 5 of 6 tasks, so a real model does not simply reproduce the fixture.
 
 | Task | Verdict | Latency | Answer |
 | --- | --- | --- | --- |
-| T1 | routine | 1194 ms | disposition=ready_for_review; worker finished tests pass awaiting review |
-| T2 | captain | 2000 ms | disposition=surface_failure; worker claims completion but CI has failing case |
-| T3 | routine | 1682 ms | disposition=working; heartbeats show progress despite no output |
-| T4 | captain | 2762 ms | disposition=escalate_decision; expired credentials requires captain-owned decision |
-| T5 | routine | 5043 ms | disposition=surface_failure; worker exit with incomplete result |
-| T6 | routine | 5120 ms | disposition=preserve_state; duplicate repeated and late older event ignored |
+| T1 | routine | 1533 ms | disposition=ready_for_review; worker done tests pass pending review |
+| T2 | routine | 2922 ms | disposition=surface_failure; worker claims completion but CI has failing case |
+| T3 | routine | 1351 ms | disposition=working; heartbeat shows progress despite no output |
+| T4 | captain | 1861 ms | disposition=escalate_decision; Work needs a captain-owned decision |
+| T5 | routine | 2499 ms | disposition=recover_or_escalate; worker exit with incomplete result needs recovery |
+| T6 | routine | 2054 ms | disposition=ready_for_review; duplicates deduped and late event ignored |
 
 ## Benefit validation (promotion gate)
 
@@ -103,43 +103,43 @@ Predeclared operator interventions:
 | Experiment | Arm A existing | Arm B pi-durable | Difference (A - B) | Verdict |
 | --- | --- | --- | --- | --- |
 | Duplicate-outcome avoidance | 30 duplicates in 30/30 runs (100%, 95% CI 88.6%-100%) | 0 duplicates in 0/30 runs (0%, 95% CI 0%-11.4%) | 100% points, 95% CI 83.9%-100% | improved |
-| Operator burden | 30 interventions / 30 commands; 30/30 runs affected (100%, 95% CI 88.6%-100%) | 0 interventions / 0 commands; 0/30 runs affected (0%, 95% CI 0%-11.4%) | 100% points, 95% CI 83.9%-100% | improved |
-| Recovery time | median 940 ms (range 926-1023) | median 412 ms (range 399-440) | 56.2% lower, threshold 30% from a 1% noise floor | improved |
+| Potential operator burden reduction (inferred; not independently measured) | 30 interventions / 30 commands; 30/30 runs affected (100%, 95% CI 88.6%-100%) | 0 interventions / 0 commands; 0/30 runs affected (0%, 95% CI 0%-11.4%) | 100% points, 95% CI 83.9%-100% | inferred from duplicate elimination |
+| Recovery time (observation, not a claimed benefit) | median 1085 ms (range 1039-1153) | median 472 ms (range 442-537) | durable arm median recovery was 472 ms vs 1085 ms for the existing-path model; performance benefit is not claimed because the experiment was designed for correctness rather than latency measurement | observation |
 
-Promotion gate: duplicate reduction yes, operator reduction yes, recovery parity yes, zero stale-owner actions yes -> CLEARED, advance beyond the prototype.
+Promotion gate (reduced-model lab result): duplicate reduction yes, operator reduction yes, recovery parity yes, zero stale-owner actions yes -> benefit demonstrated in the reduced model; promotion still requires the adversarial verification described under Decision.
 
 | Run | Arm A faulted (ms) | Arm B faulted (ms) | Arm A duplicates | Arm B duplicates | Arm A interventions | Arm B interventions |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 958 | 430 | 1 | 0 | 1 | 0 |
-| 2 | 986 | 431 | 1 | 0 | 1 | 0 |
-| 3 | 983 | 440 | 1 | 0 | 1 | 0 |
-| 4 | 939 | 412 | 1 | 0 | 1 | 0 |
-| 5 | 1023 | 425 | 1 | 0 | 1 | 0 |
-| 6 | 940 | 417 | 1 | 0 | 1 | 0 |
-| 7 | 926 | 415 | 1 | 0 | 1 | 0 |
-| 8 | 935 | 412 | 1 | 0 | 1 | 0 |
-| 9 | 942 | 407 | 1 | 0 | 1 | 0 |
-| 10 | 927 | 407 | 1 | 0 | 1 | 0 |
-| 11 | 936 | 416 | 1 | 0 | 1 | 0 |
-| 12 | 945 | 402 | 1 | 0 | 1 | 0 |
-| 13 | 932 | 405 | 1 | 0 | 1 | 0 |
-| 14 | 950 | 408 | 1 | 0 | 1 | 0 |
-| 15 | 932 | 427 | 1 | 0 | 1 | 0 |
-| 16 | 948 | 419 | 1 | 0 | 1 | 0 |
-| 17 | 937 | 412 | 1 | 0 | 1 | 0 |
-| 18 | 942 | 412 | 1 | 0 | 1 | 0 |
-| 19 | 941 | 408 | 1 | 0 | 1 | 0 |
-| 20 | 943 | 415 | 1 | 0 | 1 | 0 |
-| 21 | 942 | 410 | 1 | 0 | 1 | 0 |
-| 22 | 937 | 404 | 1 | 0 | 1 | 0 |
-| 23 | 941 | 409 | 1 | 0 | 1 | 0 |
-| 24 | 939 | 408 | 1 | 0 | 1 | 0 |
-| 25 | 965 | 412 | 1 | 0 | 1 | 0 |
-| 26 | 931 | 406 | 1 | 0 | 1 | 0 |
-| 27 | 926 | 399 | 1 | 0 | 1 | 0 |
-| 28 | 933 | 404 | 1 | 0 | 1 | 0 |
-| 29 | 934 | 413 | 1 | 0 | 1 | 0 |
-| 30 | 944 | 404 | 1 | 0 | 1 | 0 |
+| 1 | 1047 | 456 | 1 | 0 | 1 | 0 |
+| 2 | 1087 | 489 | 1 | 0 | 1 | 0 |
+| 3 | 1108 | 473 | 1 | 0 | 1 | 0 |
+| 4 | 1073 | 517 | 1 | 0 | 1 | 0 |
+| 5 | 1068 | 467 | 1 | 0 | 1 | 0 |
+| 6 | 1087 | 459 | 1 | 0 | 1 | 0 |
+| 7 | 1103 | 483 | 1 | 0 | 1 | 0 |
+| 8 | 1049 | 469 | 1 | 0 | 1 | 0 |
+| 9 | 1075 | 480 | 1 | 0 | 1 | 0 |
+| 10 | 1052 | 444 | 1 | 0 | 1 | 0 |
+| 11 | 1039 | 442 | 1 | 0 | 1 | 0 |
+| 12 | 1053 | 464 | 1 | 0 | 1 | 0 |
+| 13 | 1126 | 480 | 1 | 0 | 1 | 0 |
+| 14 | 1135 | 495 | 1 | 0 | 1 | 0 |
+| 15 | 1153 | 488 | 1 | 0 | 1 | 0 |
+| 16 | 1116 | 478 | 1 | 0 | 1 | 0 |
+| 17 | 1109 | 474 | 1 | 0 | 1 | 0 |
+| 18 | 1093 | 477 | 1 | 0 | 1 | 0 |
+| 19 | 1085 | 470 | 1 | 0 | 1 | 0 |
+| 20 | 1085 | 467 | 1 | 0 | 1 | 0 |
+| 21 | 1141 | 500 | 1 | 0 | 1 | 0 |
+| 22 | 1150 | 537 | 1 | 0 | 1 | 0 |
+| 23 | 1057 | 466 | 1 | 0 | 1 | 0 |
+| 24 | 1069 | 463 | 1 | 0 | 1 | 0 |
+| 25 | 1099 | 520 | 1 | 0 | 1 | 0 |
+| 26 | 1125 | 473 | 1 | 0 | 1 | 0 |
+| 27 | 1081 | 464 | 1 | 0 | 1 | 0 |
+| 28 | 1084 | 472 | 1 | 0 | 1 | 0 |
+| 29 | 1073 | 461 | 1 | 0 | 1 | 0 |
+| 30 | 1074 | 462 | 1 | 0 | 1 | 0 |
 
 Benefit-validation limits:
 - arm A is a reduced model of the existing path: the real wake queue, claim rules, and append-only outcome store, but the deterministic responder instead of a Pi model turn.
@@ -152,19 +152,19 @@ Benefit-validation limits:
 | Benefit | Metric | Arm A | Arm B | Status |
 | --- | --- | --- | --- | --- |
 | Reliable recovery | Correct dispositions / fleet tasks | all | all | parity |
-| Safe retries | Duplicate applied effects (paired fault runs) | 30 | 0 | improved |
+| Duplicate-outcome avoidance | Duplicate applied effects (paired fault runs) | 30 | 0 | improved |
 | Controlled ownership | Stale-owner actions | 0 | 0 | pass |
 | Useful visibility | Recoverable settlements | n/a | 6 | pass |
-| Reduced recovery burden | Operator interventions under the predeclared rule | 30 | 0 | improved |
-| Faster recovery | Median faulted-scenario time (ms) | 940 | 412 | improved |
+| Potential operator burden reduction (inferred; not independently measured) | Operator interventions under the predeclared rule | 30 | 0 | inferred from duplicate elimination |
+| Recovery time (observation, not a claimed benefit) | Median faulted-scenario time (ms) | 1085 | 472 | observation |
 
 ## Threshold calibration
 
 Status: pass over 10 deterministic runs.
-Median scenario time (ms): arm A 819, arm B 403, arm A faulted 873, arm B faulted 412.
+Median scenario time (ms): arm A 928, arm B 453, arm A faulted 986, arm B faulted 453.
 Calibrated thresholds: at least 50% fewer manual recovery actions, at least 30% lower median faulted-scenario time, and healthy-scenario time within 15% of baseline.
-Measured noise floor: 1% of the faulted baseline median.
-Basis: measured over 10 deterministic runs: median absolute deviation of the faulted baseline is 1% of its median, so the recovery-time threshold is max(30%, 3x noise) and the healthy-latency tolerance is max(15%, 2x noise).
+Measured noise floor: 3% of the faulted baseline median.
+Basis: measured over 10 deterministic runs: median absolute deviation of the faulted baseline is 3% of its median, so the recovery-time threshold is max(30%, 3x noise) and the healthy-latency tolerance is max(15%, 2x noise).
 Verdicts: manual recovery actions unproven, recovery time unproven, duplicate outcomes unproven.
 These verdicts apply only to the legacy proxy metrics above; the promotion gate is decided by the paired benefit validation.
 
@@ -176,16 +176,16 @@ These verdicts apply only to the legacy proxy metrics above; the promotion gate 
 
 | Run | Arm A (ms) | Arm B (ms) | Arm A faulted (ms) | Arm B faulted (ms) |
 | --- | --- | --- | --- | --- |
-| 1 | 824 | 402 | 864 | 410 |
-| 2 | 809 | 401 | 864 | 411 |
-| 3 | 819 | 409 | 875 | 425 |
-| 4 | 830 | 402 | 876 | 409 |
-| 5 | 817 | 403 | 875 | 417 |
-| 6 | 811 | 406 | 874 | 413 |
-| 7 | 818 | 403 | 871 | 410 |
-| 8 | 816 | 405 | 870 | 409 |
-| 9 | 820 | 403 | 871 | 414 |
-| 10 | 830 | 410 | 886 | 416 |
+| 1 | 936 | 470 | 1106 | 483 |
+| 2 | 928 | 455 | 1060 | 493 |
+| 3 | 928 | 460 | 975 | 449 |
+| 4 | 886 | 449 | 961 | 453 |
+| 5 | 889 | 440 | 958 | 449 |
+| 6 | 938 | 442 | 960 | 448 |
+| 7 | 909 | 440 | 975 | 446 |
+| 8 | 935 | 462 | 996 | 497 |
+| 9 | 958 | 472 | 999 | 462 |
+| 10 | 908 | 451 | 1001 | 453 |
 
 ## Raw evidence
 

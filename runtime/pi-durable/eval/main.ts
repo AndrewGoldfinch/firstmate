@@ -141,14 +141,14 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("## Decision");
   lines.push("");
   const gate = results.benefit.promotionGate;
-  lines.push(`Decision: ${gate.verdict === "advance" ? "advance beyond the prototype; Phase 1 adoption remains a captain call" : "HOLD at prototype"}.`);
+  lines.push("Decision: HOLD pending adversarial verification; Phase 1 adoption remains a captain call.");
   lines.push(
     gate.verdict === "advance"
-      ? "Benefit validation cleared the promotion gate: durable supervision showed a statistically meaningful reduction in duplicate outcomes or operator intervention under the faulted workload, with recovery parity and zero stale-owner actions."
+      ? `The reduced-model benefit experiment demonstrates duplicate-outcome avoidance (${results.benefit.duplicateOutcomes.existing.successes}/${results.benefit.runs} runs duplicated for the existing-path model vs ${results.benefit.duplicateOutcomes.durable.successes}/${results.benefit.runs} for the durable arm). This is strong evidence for the mechanism, but it rests on a reduced Arm A, so the promotion gate stays closed until an independent adversarial verification confirms Arm A fidelity, equivalent fault placement, and ledger accuracy, and fails to produce an Arm B duplicate across expanded crash interleavings.`
       : "Correctness criteria are met for all executable fault classes, but the benefit-validation evidence does not show a statistically meaningful reduction in duplicate outcomes or operator intervention under the faulted workload, so the prototype stays on hold.",
   );
   lines.push("");
-  lines.push("Promotion gate: advance beyond the prototype only if durable supervision shows a statistically meaningful reduction in duplicate outcomes or operator intervention under faulted workloads, while maintaining recovery parity and zero stale-owner actions.");
+  lines.push("Decision rule: advance to Phase 1 if and only if the adversarial verifier confirms Arm A fidelity, equivalent fault placement, and ledger accuracy, and fails to produce a duplicate in Arm B across expanded crash interleavings. Operator-burden reduction is inferred from duplicate elimination rather than independently measured, and is not a second required benefit. Recovery time is an observation, not a claimed benefit.");
   lines.push("");
   lines.push("## Environment and scope");
   lines.push("");
@@ -240,14 +240,14 @@ export function renderReport(results: EvaluationResults): string {
     `| Duplicate-outcome avoidance | ${benefit.duplicateOutcomes.existingTotal} duplicates in ${benefit.duplicateOutcomes.existing.successes}/${benefit.runs} runs (${percent(benefit.duplicateOutcomes.existing.rate)}, 95% CI ${percent(benefit.duplicateOutcomes.existing.lower)}-${percent(benefit.duplicateOutcomes.existing.upper)}) | ${benefit.duplicateOutcomes.durableTotal} duplicates in ${benefit.duplicateOutcomes.durable.successes}/${benefit.runs} runs (${percent(benefit.duplicateOutcomes.durable.rate)}, 95% CI ${percent(benefit.duplicateOutcomes.durable.lower)}-${percent(benefit.duplicateOutcomes.durable.upper)}) | ${percent(benefit.duplicateOutcomes.difference.rate)} points, 95% CI ${percent(benefit.duplicateOutcomes.difference.lower)}-${percent(benefit.duplicateOutcomes.difference.upper)} | ${benefit.duplicateOutcomes.verdict} |`,
   );
   lines.push(
-    `| Operator burden | ${benefit.operatorBurden.existing.interventions} interventions / ${benefit.operatorBurden.existing.commands} commands; ${benefit.operatorBurden.existingRunsWithIntervention.successes}/${benefit.runs} runs affected (${percent(benefit.operatorBurden.existingRunsWithIntervention.rate)}, 95% CI ${percent(benefit.operatorBurden.existingRunsWithIntervention.lower)}-${percent(benefit.operatorBurden.existingRunsWithIntervention.upper)}) | ${benefit.operatorBurden.durable.interventions} interventions / ${benefit.operatorBurden.durable.commands} commands; ${benefit.operatorBurden.durableRunsWithIntervention.successes}/${benefit.runs} runs affected (${percent(benefit.operatorBurden.durableRunsWithIntervention.rate)}, 95% CI ${percent(benefit.operatorBurden.durableRunsWithIntervention.lower)}-${percent(benefit.operatorBurden.durableRunsWithIntervention.upper)}) | ${percent(benefit.operatorBurden.difference.rate)} points, 95% CI ${percent(benefit.operatorBurden.difference.lower)}-${percent(benefit.operatorBurden.difference.upper)} | ${benefit.operatorBurden.verdict} |`,
+    `| Potential operator burden reduction (inferred; not independently measured) | ${benefit.operatorBurden.existing.interventions} interventions / ${benefit.operatorBurden.existing.commands} commands; ${benefit.operatorBurden.existingRunsWithIntervention.successes}/${benefit.runs} runs affected (${percent(benefit.operatorBurden.existingRunsWithIntervention.rate)}, 95% CI ${percent(benefit.operatorBurden.existingRunsWithIntervention.lower)}-${percent(benefit.operatorBurden.existingRunsWithIntervention.upper)}) | ${benefit.operatorBurden.durable.interventions} interventions / ${benefit.operatorBurden.durable.commands} commands; ${benefit.operatorBurden.durableRunsWithIntervention.successes}/${benefit.runs} runs affected (${percent(benefit.operatorBurden.durableRunsWithIntervention.rate)}, 95% CI ${percent(benefit.operatorBurden.durableRunsWithIntervention.lower)}-${percent(benefit.operatorBurden.durableRunsWithIntervention.upper)}) | ${percent(benefit.operatorBurden.difference.rate)} points, 95% CI ${percent(benefit.operatorBurden.difference.lower)}-${percent(benefit.operatorBurden.difference.upper)} | inferred from duplicate elimination |`,
   );
   lines.push(
-    `| Recovery time | median ${Math.round(benefit.recoveryTime.existingFaulted.median)} ms (range ${Math.round(benefit.recoveryTime.existingFaulted.min)}-${Math.round(benefit.recoveryTime.existingFaulted.max)}) | median ${Math.round(benefit.recoveryTime.durableFaulted.median)} ms (range ${Math.round(benefit.recoveryTime.durableFaulted.min)}-${Math.round(benefit.recoveryTime.durableFaulted.max)}) | ${percent(benefit.recoveryTime.medianReductionPercent / 100)} lower, threshold ${benefit.recoveryTime.thresholdPercent}% from a ${benefit.recoveryTime.noiseFloorPercent}% noise floor | ${benefit.recoveryTime.verdict} |`,
+    `| Recovery time (observation, not a claimed benefit) | median ${Math.round(benefit.recoveryTime.existingFaulted.median)} ms (range ${Math.round(benefit.recoveryTime.existingFaulted.min)}-${Math.round(benefit.recoveryTime.existingFaulted.max)}) | median ${Math.round(benefit.recoveryTime.durableFaulted.median)} ms (range ${Math.round(benefit.recoveryTime.durableFaulted.min)}-${Math.round(benefit.recoveryTime.durableFaulted.max)}) | durable arm median recovery was ${Math.round(benefit.recoveryTime.durableFaulted.median)} ms vs ${Math.round(benefit.recoveryTime.existingFaulted.median)} ms for the existing-path model; performance benefit is not claimed because the experiment was designed for correctness rather than latency measurement | observation |`,
   );
   lines.push("");
   lines.push(
-    `Promotion gate: duplicate reduction ${benefit.promotionGate.duplicateReduction ? "yes" : "no"}, operator reduction ${benefit.promotionGate.operatorReduction ? "yes" : "no"}, recovery parity ${benefit.promotionGate.recoveryParity ? "yes" : "no"}, zero stale-owner actions ${benefit.promotionGate.zeroStaleOwnerActions ? "yes" : "no"} -> ${benefit.promotionGate.verdict === "advance" ? "CLEARED, advance beyond the prototype" : "NOT cleared, keep the HOLD decision"}.`,
+    `Promotion gate (reduced-model lab result): duplicate reduction ${benefit.promotionGate.duplicateReduction ? "yes" : "no"}, operator reduction ${benefit.promotionGate.operatorReduction ? "yes" : "no"}, recovery parity ${benefit.promotionGate.recoveryParity ? "yes" : "no"}, zero stale-owner actions ${benefit.promotionGate.zeroStaleOwnerActions ? "yes" : "no"} -> ${benefit.promotionGate.verdict === "advance" ? "benefit demonstrated in the reduced model; promotion still requires the adversarial verification described under Decision" : "not cleared, keep the HOLD decision"}.`,
   );
   lines.push("");
   lines.push("| Run | Arm A faulted (ms) | Arm B faulted (ms) | Arm A duplicates | Arm B duplicates | Arm A interventions | Arm B interventions |");
@@ -269,7 +269,7 @@ export function renderReport(results: EvaluationResults): string {
     `| Reliable recovery | Correct dispositions / fleet tasks | ${results.grades.existing.passed ? "all" : "some"} | ${results.grades["pi-durable"].passed ? "all" : "some"} | ${results.grades["pi-durable"].passed ? "parity" : "unproven"} |`,
   );
   lines.push(
-    `| Safe retries | Duplicate applied effects (paired fault runs) | ${results.benefit.duplicateOutcomes.existingTotal} | ${results.benefit.duplicateOutcomes.durableTotal} | ${results.benefit.duplicateOutcomes.verdict} |`,
+    `| Duplicate-outcome avoidance | Duplicate applied effects (paired fault runs) | ${results.benefit.duplicateOutcomes.existingTotal} | ${results.benefit.duplicateOutcomes.durableTotal} | ${results.benefit.duplicateOutcomes.verdict} |`,
   );
   lines.push(
     `| Controlled ownership | Stale-owner actions | ${results.arms.existing.trace.effects.filter((effect) => !results.arms.existing.trace.allowedOwners.includes(effect.owner)).length} | ${results.arms["pi-durable"].trace.effects.filter((effect) => !results.arms["pi-durable"].trace.allowedOwners.includes(effect.owner)).length} | pass |`,
@@ -278,10 +278,10 @@ export function renderReport(results: EvaluationResults): string {
     `| Useful visibility | Recoverable settlements | n/a | ${results.arms["pi-durable"].trace.operations.filter((operation) => operation.state === "settled").length} | pass |`,
   );
   lines.push(
-    `| Reduced recovery burden | Operator interventions under the predeclared rule | ${results.benefit.operatorBurden.existing.interventions} | ${results.benefit.operatorBurden.durable.interventions} | ${results.benefit.operatorBurden.verdict} |`,
+    `| Potential operator burden reduction (inferred; not independently measured) | Operator interventions under the predeclared rule | ${results.benefit.operatorBurden.existing.interventions} | ${results.benefit.operatorBurden.durable.interventions} | inferred from duplicate elimination |`,
   );
   lines.push(
-    `| Faster recovery | Median faulted-scenario time (ms) | ${Math.round(results.benefit.recoveryTime.existingFaulted.median)} | ${Math.round(results.benefit.recoveryTime.durableFaulted.median)} | ${results.benefit.recoveryTime.verdict} |`,
+    `| Recovery time (observation, not a claimed benefit) | Median faulted-scenario time (ms) | ${Math.round(results.benefit.recoveryTime.existingFaulted.median)} | ${Math.round(results.benefit.recoveryTime.durableFaulted.median)} | observation |`,
   );
   lines.push("");
   lines.push("## Threshold calibration");
