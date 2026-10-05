@@ -1,6 +1,6 @@
 # Pi Durable Phase 1 plan
 
-Status: **conditional**. Phase 1 is approved only if the corrected-experiment adversarial verifier returns `ADVANCE`; this file records the captain's approval text and the first milestone so the call can be enacted immediately when it clears.
+Status: **not activated**. The corrected-experiment adversarial verifier returned **HOLD - IMPLEMENTATION** (report: `docs/pi-durable/10-benefit-verification-2.md`): an Arm B duplicate exists under a legitimate interleaving, because the durable arm is measured at the outcome-append boundary and is never subjected to the documented F09 delivery fault. The captain's conditional approval below did not activate; Phase 1 remains gated and the captain call is held as `pi-durable-f09-scope`. This file is retained as the prepared (but unactivated) plan.
 
 ## Captain's conditional approval (verbatim)
 

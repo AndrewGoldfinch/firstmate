@@ -142,10 +142,10 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("");
   const gate = results.benefit.promotionGate;
   lines.push(
-    `Decision: ${gate.verdict === "advance" ? "ADVANCE - EVIDENCE" : "HOLD - EVIDENCE"}. Independent adversarial verification returned HOLD - EVIDENCE on the prior run (report: docs/pi-durable/08-benefit-verification.md). The evaluation harness was then corrected to observe the external effect independently, target the documented routine-note delivery limitation, make the stale-owner check non-vacuous, and drop operator burden from the gate; an independent verifier re-runs it.`,
+    "Decision: HOLD - IMPLEMENTATION. Independent adversarial verification (docs/pi-durable/10-benefit-verification-2.md) found an Arm B duplicate under a legitimate interleaving; Phase 1 is not approved and the captain call is held as pi-durable-f09-scope.",
   );
   lines.push(
-    `Corrected benefit experiment: the existing-path model duplicated an externally delivered routine note in ${results.benefit.duplicateDeliveries.existing.successes}/${results.benefit.runs} runs, the durable arm in ${results.benefit.duplicateDeliveries.durable.successes}/${results.benefit.runs}; the stale-owner check saw ${results.benefit.staleOwner.attempts} superseded-owner attempt(s) with ${results.benefit.staleOwner.accepted} accepted; the dedup-disabled control recreated the failure (with an operation key ${results.benefit.causalControl.withOperationKey} row(s), without one ${results.benefit.causalControl.withoutOperationKey}).`,
+    `The corrected experiment's 0/${results.benefit.runs} durable delivery count is structural: the harness measures arm B at the outcome-append boundary and never subjects it to the documented F09 delivery fault, so it cannot observe a duplicate delivery. Applying the F09 failed-cursor re-presentation to a durable-committed row, the durable arm re-presents the note (one duplicate delivery). The supported narrow claim is that the durable sink does not append a duplicate outcome row on replay; the broad claim that durable execution prevents duplicate externally visible deliveries is not supported, because delivery is a shared branch-loop property the sidecar does not change.`,
   );
   lines.push("");
   lines.push(

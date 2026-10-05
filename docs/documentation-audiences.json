@@ -429,6 +429,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/pi-durable/10-benefit-verification-2.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
