@@ -101,7 +101,7 @@ export async function runEvaluation(workDir = mkdtempSync(join(tmpdir(), "fm-pi-
 
   return {
     generatedAt: new Date().toISOString(),
-    environment: `Node ${process.version}; local Linux host; deterministic responder for both arms; arm A drives the real wake queue, claim rules, and append-only outcome store; disposable-container restart lane for the process-crash and store-reopen boundaries; bounded real-model pilot when a provider credential is reachable`,
+    environment: `Node ${process.version}; local Linux host; deterministic responder for both arms; arm A drives the real wake queue, claim rules, and append-only outcome store; disposable-container teardown lane (SIGKILL, remove, recreate with its own namespaces) for the process-crash and store-reopen boundaries; bounded real-model pilot when a provider credential is reachable`,
     arms: { existing, "pi-durable": durable, existingWithFault, "pi-durableWithFault": durableWithFault },
     grades,
     negativeControls: negative,
@@ -175,7 +175,7 @@ export function renderReport(results: EvaluationResults): string {
   lines.push(
     `Image: ${results.dockerLane.image ?? "none"}; Docker server: ${results.dockerLane.dockerServer ?? "unknown"}.`,
   );
-  lines.push("The failure boundary - SIGKILL and restart - is owned by the host, outside the container.");
+  lines.push("The failure boundary - SIGKILL, remove, and recreate with fresh namespaces - is owned by the host, outside the container.");
   for (const command of results.dockerLane.commands ?? []) {
     lines.push("");
     lines.push("```sh");
@@ -273,8 +273,8 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("- The deterministic responder returns fixture truth, so this harness measures execution durability, not model judgment.");
   lines.push("- F09 is exercised against the real store: a routine note has no durable idempotent record, so a failed cursor write re-presents the already-delivered row. The limitation is pinned by the targeted test and tracked as follow-up `fm-pi-routine-delivery-idempotency-followup-r1`.");
   lines.push("- The outcome sink is keyed by the operation identity with an atomic append-or-return-existing, so two distinct operations with identical text no longer collide; the evaluation's duplicate-outcome comparison still only subtracts total outcome counts between arms and does not establish the absence of duplicates.");
-  lines.push("- The container lane shares the host pid namespace on purpose, because the runtime ownership lock records a pid and treats a live pid as a live owner; a containerized restart inside its own pid namespace would need an explicit lock reclaim first.");
-  lines.push("- The container lane is a process and store boundary, not an OS reboot: it proves the store reopens and the recorded authority reconciles, not that a kernel or filesystem failure is survivable.");
+  lines.push("- The recreate container runs in its own pid namespace, so the recorded owner pid is not a reliable liveness signal there and the lane reclaims the stale ownership lock explicitly before starting it.");
+  lines.push("- The container lane is a container and process boundary, not an OS reboot: it proves the store reopens and the recorded authority reconciles after a teardown + recreate, not that a kernel or filesystem failure is survivable.");
   lines.push("- The pilot's answers vary between runs, so its disposition match count is one sample rather than a rate.");
   lines.push("- The real-model pilot asks one shared set of model answers and replays them through both arms, so it isolates execution durability rather than measuring per-arm model variance; independent per-arm model calls remain the fuller form the design describes.");
   lines.push("- The pilot drives the pinned provider directly because the durable conversation seam does not carry the session-affinity header the provider requires, so it does not exercise the prototype's execution seam end to end.");

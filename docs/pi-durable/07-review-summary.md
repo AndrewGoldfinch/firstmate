@@ -21,7 +21,7 @@ The existing supervision path stays the default and is unchanged when the opt-in
 
 - Arm A is now the real pinned existing Pi supervision path as far as this environment allows: it drives the real wake queue and lease/claim rules (`bin/fm-wake-lib.sh`, `bin/fm-branch-dispatch.mjs`) and the real append-only outcome store (`bin/fm-branch-outcome.sh`). A full Pi `AgentSession` cannot be driven headlessly here, so the wake is answered by the deterministic responder instead of a Pi model turn; the wake queue, claim rules, and store are real.
 - A crash mid-task now leaves its wake row queued, so the restarted owner re-claims and reruns it. Both arms complete the required recovery; no accepted task is lost.
-- F09, F16, and F18 are now exercised rather than declared: F09 drives the real routine-delivery cursor-failure window, F16 injects a registered provider with no credential and asserts `PROVIDER_UNAVAILABLE` with no fallback call, and F18 restores a copy of the adapter store into a different home and asserts `HOME_MISMATCH`. F17 stays a known-gap: its boundary is a container restart, not a host kernel reboot.
+- F09, F16, and F18 are now exercised rather than declared: F09 drives the real routine-delivery cursor-failure window, F16 injects a registered provider with no credential and asserts `PROVIDER_UNAVAILABLE` with no fallback call, and F18 restores a copy of the adapter store into a different home and asserts `HOME_MISMATCH`. F17 stays a known-gap: its boundary is a container teardown + recreate, not a host kernel reboot. The container lane was integrated from `experiment/pi-durable-f17-lane` (commit `c5b377a3`); its internals were not edited.
 - Benefit verdicts remain **unproven**; the calibrated thresholds were recomputed from the new 10-run spread.
 
 ## Review fixes (this pass)
@@ -56,6 +56,7 @@ GitHub: [report](https://github.com/AndrewGoldfinch/firstmate/blob/experiment/pi
 | P2b coverage + pilot + calibration | `4e34845b`, `79c12f1a`, `fc620173`, `41397d8b`, `f891eb4c`, `b03e80a9`, `3bd13ea7`, `77b49eb0` |
 | Reviewer summary + review fixes | `432126c9`, `05e81277` |
 | Fuller comparison (real arm A, F09/F16/F18, recalibration) | `experiment/pi-durable-compare` |
+| Container teardown + recreate lane | `c5b377a3` (`experiment/pi-durable-f17-lane`, merged) |
 
 ## How to verify
 
@@ -75,7 +76,7 @@ Socket-dependent tests are environment-sensitive: the reviewer's environment blo
 
 ## Results at a glance
 
-- Fault matrix F01-F18: **17 pass, 0 fail, 0 not-covered, 1 known-gap** (F17, whose boundary is a container restart rather than a host reboot; F09/F16/F18 are now exercised and pass).
+- Fault matrix F01-F18: **17 pass, 0 fail, 0 not-covered, 1 known-gap** (F17, whose boundary is a container teardown + recreate rather than a host reboot; F09/F16/F18 are now exercised and pass).
 - Grader negative controls: **4/4 rejected** (dropped row, injected effect, forged completion, swapped ack owner).
 - Real-model pilot: **pass** - `opencode-go/muse-spark-1.3-contributor`, 6 calls, both arms completed all six tasks, 5/6 dispositions matched (one sample, not a rate).
 - Benefit: **initial contracts tested; important correctness gaps remain, benefit unproven** — recovery parity, recorded-fault parity, recovery time unproven (durable arm slightly slower), duplicate-outcome avoidance unproven. Thresholds calibrated over 10 runs (noise floor ~3%), but the manual-action count is a recorded-fault count rather than operator actions, the recovery-time comparison times whole scenarios whose faulted runs still include missing outcomes, and the duplicate comparison only subtracts total outcome counts between arms.
@@ -95,7 +96,7 @@ Socket-dependent tests are environment-sensitive: the reviewer's environment blo
 - Arm A is not a full Pi `AgentSession`: the deterministic responder stands in for the Pi model turn, so the extension's model-side behavior is not exercised; the wake queue, claim rules, and outcome store it drives are the real ones.
 - The deterministic responder returns fixture truth, so the harness measures execution durability, not model judgment.
 - F09 is exercised: a routine note has no durable idempotent record, so a failed cursor write re-presents the already-delivered row (tracked as follow-up `fm-pi-routine-delivery-idempotency-followup-r1`).
-- The container lane is a process/store boundary, not an OS reboot: it proves the store reopens and the recorded authority reconciles, not that a kernel or filesystem failure is survivable; F17's boundary is a container restart, not a host kernel reboot.
+- The container lane is a container/process boundary, not an OS reboot: it proves the store reopens and the recorded authority reconciles after a teardown + recreate, not that a kernel or filesystem failure is survivable; F17's boundary is a container teardown + recreate, not a host kernel reboot. The recreate container runs in its own pid namespace, so the recorded owner pid is not a reliable liveness signal there and the lane reclaims the stale ownership lock explicitly.
 - The outcome sink is now keyed by the operation identity with an atomic append-or-return-existing, so two distinct operations with identical text no longer collide; the evaluation's duplicate-outcome comparison still only subtracts total counts between arms and does not establish the absence of duplicates.
 - F16 injects a registered provider with no configured credential and asserts `PROVIDER_UNAVAILABLE` without calling the registered fallback executor.
 - F18 restores a copy of the adapter store into a different home and the owner refuses to open it (`HOME_MISMATCH`).

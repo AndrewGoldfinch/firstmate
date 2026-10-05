@@ -750,10 +750,10 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
   });
   results.push({
     id: "F17",
-    title: "container process/store restart (host reboot not exercised)",
+    title: "container teardown + recreate (host reboot not exercised)",
     status: lane?.f17?.status === "pass" ? "known-gap" : laneStatus(lane?.f17?.status),
     detail: lane?.f17
-      ? `image=${lane.image ?? "unknown"} docker=${lane.dockerServer ?? "unknown"} ${JSON.stringify(lane.f17.evidence)}; the container restarted but the host kernel kept running, so a real host reboot remains unexercised`
+      ? `image=${lane.image ?? "unknown"} docker=${lane.dockerServer ?? "unknown"} ${JSON.stringify(lane.f17.evidence)}; the container was torn down and recreated with its own namespaces, so a real host reboot remains unexercised`
       : `container lane: ${lane?.reason ?? "not run"}`,
   });
   return results.sort((a, b) => a.id.localeCompare(b.id));

@@ -1,10 +1,10 @@
 # Pi Durable evaluation report (P2)
 
-Generated 2026-10-05T00:05:33.037Z.
+Generated 2026-10-05T00:12:10.977Z.
 
 ## Environment and scope
 
-Node v22.21.1; local Linux host; deterministic responder for both arms; arm A drives the real wake queue, claim rules, and append-only outcome store; disposable-container restart lane for the process-crash and store-reopen boundaries; bounded real-model pilot when a provider credential is reachable
+Node v22.21.1; local Linux host; deterministic responder for both arms; arm A drives the real wake queue, claim rules, and append-only outcome store; disposable-container teardown lane (SIGKILL, remove, recreate with its own namespaces) for the process-crash and store-reopen boundaries; bounded real-model pilot when a provider credential is reachable
 A disposable-container restart lane provides the process-crash and store-reopen boundaries; no real VM or OS reboot boundary exists, and every case this environment cannot exercise is recorded as not-covered, never faked.
 Arm A is the real pinned existing Pi supervision path as far as this environment allows: it drives the real wake queue and lease/claim rules (bin/fm-wake-lib.sh, bin/fm-branch-dispatch.mjs) and the real append-only outcome store (bin/fm-branch-outcome.sh).
 Arm B is the real durable sidecar, bridge, and outcome sink with the same deterministic responder.
@@ -44,44 +44,44 @@ Socket-dependent tests are environment-sensitive: the reviewer's environment blo
 | F08 | after outcome commit, before adapter receipt | pass | reconciled=true replaySeq=1/1 outcomes=1 |
 | F09 | after delivery, before acknowledgement | pass | routineDelivery: append seq=1; a failed cursor write leaves the routine row unread and re-delivered (the documented routine-delivery limitation, tracked as fm-pi-routine-delivery-idempotency-followup-r1); a successful mark-read clears it (unreadAfterAck=0) |
 | F10 | stale generation cannot mutate | pass | code=AUTHORITY_STALE |
-| F11 | service crash with valid generation | pass | image=fm-pi-durable-lane:local docker=29.8.2 {"generation":1,"killed":true,"nodeInContainer":"v22.23.3","pid":4191296} |
+| F11 | service crash with valid generation | pass | image=fm-pi-durable-lane:local docker=29.8.2 {"generation":1,"killed":true,"nodeInContainer":"v22.23.3","pid":1} |
 | F12 | cancellation during tool execution | pass | intentBeforeAbort=true settledCancel=true state=cancelled runOutcome=INTERNAL outcomes=0 retainedState=cancelled unresolvedEffect=outcome-effect-unresolved unresolvedState=cancel-unresolved |
 | F13 | second owner refused | pass | refused=true |
 | F14 | observer reconnect recovers settlement | pass | settlements=1 |
 | F15 | changed payload under repeated ID | pass | code=CONFLICT |
 | F16 | missing provider credential refused, no reroute | pass | code=PROVIDER_UNAVAILABLE outcomes=0 fallbackCalls=0; the injected provider has no configured credential and the registered fallback provider was never invoked |
-| F17 | container process/store restart (host reboot not exercised) | known-gap | image=fm-pi-durable-lane:local docker=29.8.2 {"storeReopened":true,"authorityReconciled":true,"sameConversation":true,"sameGeneration":true,"staleGeneration":"AUTHORITY_STALE","operationState":"settled","receiptSeq":1,"expectedReceiptSeq":1,"outcomeRows":1,"nodeInContainer":"v22.23.3"}; the container restarted but the host kernel kept running, so a real host reboot remains unexercised |
+| F17 | container teardown + recreate (host reboot not exercised) | known-gap | image=fm-pi-durable-lane:local docker=29.8.2 {"storeReopened":true,"authorityReconciled":true,"sameConversation":true,"sameGeneration":true,"staleGeneration":"AUTHORITY_STALE","operationState":"settled","receiptSeq":1,"expectedReceiptSeq":1,"outcomeRows":1,"containerRemoved":true,"lockReclaimed":true,"staleOwnerPid":1,"nodeInContainer":"v22.23.3"}; the container was torn down and recreated with its own namespaces, so a real host reboot remains unexercised |
 | F18 | restored store refused in another home | pass | code=HOME_MISMATCH; the adapter store copied to a new home is refused because it records a different home identity |
 
 ## Disposable-container restart lane
 
 Status: pass.
 Image: fm-pi-durable-lane:local; Docker server: 29.8.2.
-The failure boundary - SIGKILL and restart - is owned by the host, outside the container.
+The failure boundary - SIGKILL, remove, and recreate with fresh namespaces - is owned by the host, outside the container.
 
 ```sh
-docker run -d --name <lane> --rm --pid=host --user 1000:1000 -e FM_HOME=/home -v /home/andy/.treehouse/firstmate-pi-durable-18cae0/1/firstmate-pi-durable:/repo:ro -v <workdir>/home:/home -w /repo/runtime/pi-durable fm-pi-durable-lane:local node eval/docker-lane-container.ts serve /home /repo/bin/fm-branch-outcome.sh
+docker run -d --name <lane> --rm --user 1000:1000 -e FM_HOME=/home -v /home/andy/.treehouse/firstmate-pi-durable-18cae0/1/firstmate-pi-durable:/repo:ro -v <workdir>/home:/home -w /repo/runtime/pi-durable fm-pi-durable-lane:local node eval/docker-lane-container.ts serve /home /repo/bin/fm-branch-outcome.sh
 ```
 
 ```sh
-docker run --rm --pid=host --user 1000:1000 -e FM_HOME=/home -v /home/andy/.treehouse/firstmate-pi-durable-18cae0/1/firstmate-pi-durable:/repo:ro -v <workdir>/home:/home -w /repo/runtime/pi-durable fm-pi-durable-lane:local node eval/docker-lane-container.ts verify /home /repo/bin/fm-branch-outcome.sh
+docker run --rm --user 1000:1000 -e FM_HOME=/home -v /home/andy/.treehouse/firstmate-pi-durable-18cae0/1/firstmate-pi-durable:/repo:ro -v <workdir>/home:/home -w /repo/runtime/pi-durable fm-pi-durable-lane:local node eval/docker-lane-container.ts verify /home /repo/bin/fm-branch-outcome.sh
 ```
 
 ## Bounded real-model pilot
 
 Status: pass.
-Provider opencode-go, model muse-spark-1.3-contributor; 6 calls in 46954 ms with 0 timeouts.
+Provider opencode-go, model muse-spark-1.3-contributor; 6 calls in 13424 ms with 0 timeouts.
 Both arms ran against the same real model answers, so the arms differ only in execution durability; arm A completed=true, arm B completed=true.
-The model matched the fixture's required disposition on 5 of 6 tasks, so a real model does not simply reproduce the fixture.
+The model matched the fixture's required disposition on 6 of 6 tasks, so a real model does not simply reproduce the fixture.
 
 | Task | Verdict | Latency | Answer |
 | --- | --- | --- | --- |
-| T1 | routine | 1872 ms | disposition=ready_for_review; tests pass, awaiting review |
-| T2 | captain | 2283 ms | disposition=surface_failure; CI failing contradicts completion claim |
-| T3 | routine | 9410 ms | disposition=working; heartbeat shows progress despite quiet logs |
-| T4 | captain | 1512 ms | disposition=escalate_decision; expired credentials needs captain-owned decision |
-| T5 | routine | 6037 ms | disposition=surface_failure; worker exit with incomplete result |
-| T6 | routine | 25839 ms | disposition=preserve_state; duplicate and late older event ignored |
+| T1 | routine | 1366 ms | disposition=ready_for_review; worker finished tests pass pending review |
+| T2 | routine | 2198 ms | disposition=surface_failure; CI failing contradicts completion claim |
+| T3 | routine | 1864 ms | disposition=working; heartbeat shows progress despite no output |
+| T4 | captain | 1439 ms | disposition=escalate_decision; expired credentials need captain-owned decision |
+| T5 | routine | 4901 ms | disposition=recover_or_escalate; worker exit with incomplete result needs retry |
+| T6 | routine | 1656 ms | disposition=preserve_state; stale duplicate ignored to keep newer state |
 
 ## Benefit scorecard (deterministic, calibrated)
 
@@ -92,12 +92,12 @@ The model matched the fixture's required disposition on 5 of 6 tasks, so a real 
 | Controlled ownership | Stale-owner actions | 0 | 0 | pass |
 | Useful visibility | Recoverable settlements | n/a | 6 | pass |
 | Reduced recovery burden | Recorded faults on the faulted fleet (not operator actions) | 1 | 1 | unproven |
-| Faster recovery | Median faulted-scenario time (ms) | 875 | 410 | unproven |
+| Faster recovery | Median faulted-scenario time (ms) | 873 | 412 | unproven |
 
 ## Threshold calibration
 
 Status: pass over 10 deterministic runs.
-Median scenario time (ms): arm A 813, arm B 402, arm A faulted 875, arm B faulted 410.
+Median scenario time (ms): arm A 817, arm B 404, arm A faulted 873, arm B faulted 412.
 Calibrated thresholds: at least 50% fewer manual recovery actions, at least 30% lower median faulted-scenario time, and healthy-scenario time within 15% of baseline.
 Measured noise floor: 1% of the faulted baseline median.
 Basis: measured over 10 deterministic runs: median absolute deviation of the faulted baseline is 1% of its median, so the recovery-time threshold is max(30%, 3x noise) and the healthy-latency tolerance is max(15%, 2x noise).
@@ -111,16 +111,16 @@ Verdicts: manual recovery actions unproven, recovery time unproven, duplicate ou
 
 | Run | Arm A (ms) | Arm B (ms) | Arm A faulted (ms) | Arm B faulted (ms) |
 | --- | --- | --- | --- | --- |
-| 1 | 830 | 411 | 869 | 410 |
-| 2 | 814 | 436 | 919 | 416 |
-| 3 | 820 | 411 | 871 | 418 |
-| 4 | 833 | 404 | 878 | 405 |
-| 5 | 809 | 399 | 861 | 407 |
-| 6 | 807 | 400 | 871 | 409 |
-| 7 | 809 | 401 | 875 | 410 |
-| 8 | 811 | 402 | 877 | 413 |
-| 9 | 826 | 402 | 875 | 407 |
-| 10 | 810 | 402 | 875 | 409 |
+| 1 | 817 | 404 | 872 | 411 |
+| 2 | 815 | 407 | 868 | 419 |
+| 3 | 816 | 403 | 872 | 413 |
+| 4 | 821 | 403 | 875 | 410 |
+| 5 | 811 | 407 | 888 | 420 |
+| 6 | 822 | 409 | 880 | 409 |
+| 7 | 813 | 400 | 867 | 414 |
+| 8 | 827 | 407 | 873 | 412 |
+| 9 | 819 | 403 | 880 | 416 |
+| 10 | 818 | 402 | 873 | 409 |
 
 ## Raw evidence
 
@@ -133,8 +133,8 @@ Each arm records the outcome rows, adapter operation records, effects, faults, a
 - The deterministic responder returns fixture truth, so this harness measures execution durability, not model judgment.
 - F09 is exercised against the real store: a routine note has no durable idempotent record, so a failed cursor write re-presents the already-delivered row. The limitation is pinned by the targeted test and tracked as follow-up `fm-pi-routine-delivery-idempotency-followup-r1`.
 - The outcome sink is keyed by the operation identity with an atomic append-or-return-existing, so two distinct operations with identical text no longer collide; the evaluation's duplicate-outcome comparison still only subtracts total outcome counts between arms and does not establish the absence of duplicates.
-- The container lane shares the host pid namespace on purpose, because the runtime ownership lock records a pid and treats a live pid as a live owner; a containerized restart inside its own pid namespace would need an explicit lock reclaim first.
-- The container lane is a process and store boundary, not an OS reboot: it proves the store reopens and the recorded authority reconciles, not that a kernel or filesystem failure is survivable.
+- The recreate container runs in its own pid namespace, so the recorded owner pid is not a reliable liveness signal there and the lane reclaims the stale ownership lock explicitly before starting it.
+- The container lane is a container and process boundary, not an OS reboot: it proves the store reopens and the recorded authority reconciles after a teardown + recreate, not that a kernel or filesystem failure is survivable.
 - The pilot's answers vary between runs, so its disposition match count is one sample rather than a rate.
 - The real-model pilot asks one shared set of model answers and replays them through both arms, so it isolates execution durability rather than measuring per-arm model variance; independent per-arm model calls remain the fuller form the design describes.
 - The pilot drives the pinned provider directly because the durable conversation seam does not carry the session-affinity header the provider requires, so it does not exercise the prototype's execution seam end to end.
