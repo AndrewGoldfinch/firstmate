@@ -7,10 +7,10 @@
  * repairs an implementation, adds retries, deduplicates effects, or synthesizes
  * outcomes.
  *
- * The external effect under test is an externally visible note delivery. For
- * arm A a delivery is a presentation from the store's unread rows; for arm B a
- * delivery is a new outcome row the durable sink commits. Both are recorded at
- * the boundary where the note becomes visible, never from a replay flag.
+ * The external effect under test is an externally visible note delivery. Both
+ * arms record a delivery at each presentation from the store's unread rows and
+ * take the same failed-cursor fault, so both are measured at the boundary where
+ * the note becomes visible, never from a replay flag.
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -79,6 +79,35 @@ function readUnreadOutcomes(scriptPath: string, env: NodeJS.ProcessEnv): Outcome
   return outcomeRecords(runOutcomeSync(scriptPath, env, ["unread"]));
 }
 
+/**
+ * Present every unread routine note and advance the cursor after each, exactly
+ * as the branch's shared reconciliation does. A fault after a delivery but
+ * before its cursor write leaves the row unread, so a later reconciliation
+ * presents the same logical note again. Both arms use this, so both are
+ * measured at the externally visible delivery boundary under the same
+ * failed-cursor fault.
+ */
+function presentUnread(
+  outcomeScript: string,
+  env: NodeJS.ProcessEnv,
+  deliveries: Delivery[],
+  faults: string[],
+  notes: string[],
+  faultTask: string | undefined,
+  ownerLabel: string,
+): void {
+  const unread = readUnreadOutcomes(outcomeScript, env);
+  for (const row of unread) {
+    deliveries.push({ note: row.task, owner: "branch" });
+    if (faultTask !== undefined && row.task === faultTask) {
+      faults.push(`${ownerLabel} owner lost ${faultTask} after its routine note was delivered`);
+      notes.push(`${faultTask}: routine note delivered, cursor write failed, row still unread`);
+      return;
+    }
+    runOutcomeSync(outcomeScript, env, ["mark-read", "--through", String(row.seq)]);
+  }
+}
+
 export type DurableScenarioInput = {
   home: string;
   scenario: string;
@@ -98,6 +127,14 @@ export type DurableScenarioInput = {
    * zero-stale-owner clause non-vacuous.
    */
   staleOwnerAfterSettleTask?: string;
+  /**
+   * Task whose committed routine note is presented and then the cursor write
+   * fails, so the still-unread row is presented a second time on the next
+   * reconciliation. The same failed-cursor fault the existing arm takes,
+   * applied to the durable arm's own store so both arms are measured at the
+   * externally visible delivery boundary.
+   */
+  deliverBeforeAckTask?: string;
 };
 
 /** Run one scenario through the durable arm. */
@@ -109,7 +146,6 @@ export async function runDurableScenario(input: DurableScenarioInput): Promise<A
   const notes: string[] = [];
   const deliveries: Delivery[] = [];
   const staleOwnerAttempts: StaleOwnerAttempt[] = [];
-  const observedRows = new Map<string, number>();
   let crashArmed = input.crashAt !== undefined;
 
   const faux = fauxProvider();
@@ -149,18 +185,6 @@ export async function runDurableScenario(input: DurableScenarioInput): Promise<A
   let sidecar = await startSidecar();
   await ensureSupervisor(sidecar);
 
-  // A delivery is a new outcome row observed through the store, so a durable
-  // sink that re-applied an effect while reporting a replay would still be seen.
-  const observeDeliveries = async (): Promise<void> => {
-    const rows = await readOutcomeStore(input.outcomeScript, env);
-    for (const task of input.tasks) {
-      const count = rows.filter((row) => row.task === task.id).length;
-      const prior = observedRows.get(task.id) ?? 0;
-      for (let index = prior; index < count; index += 1) deliveries.push({ note: task.id, owner: "branch" });
-      observedRows.set(task.id, count);
-    }
-  };
-
   const operationViews: OperationRecordView[] = [];
   for (const task of input.tasks) {
     const operationId = `fm:${input.home}:supervision:${task.id}:1`;
@@ -184,7 +208,6 @@ export async function runDurableScenario(input: DurableScenarioInput): Promise<A
         { operationId, prompt: `supervise ${task.id}`, payload: { task: task.id, rows: task.acceptedRows } },
       );
       notes.push(`${task.id}: seq=${result.seq} replayed=${result.replayed}`);
-      await observeDeliveries();
       settled = true;
       if (input.crashAfterSettleTask === task.id) {
         faults.push(`pi-durable owner lost ${task.id} after settlement`);
@@ -208,7 +231,6 @@ export async function runDurableScenario(input: DurableScenarioInput): Promise<A
           { operationId, prompt: `supervise ${task.id}`, payload: { task: task.id, rows: task.acceptedRows } },
         );
         notes.push(`${task.id}: recovered seq=${replayed.seq} replayed=${replayed.replayed}`);
-        await observeDeliveries();
       } catch (error) {
         notes.push(`${task.id}: unresolved after recovery (${error instanceof Error ? error.message : String(error)})`);
       }
@@ -260,6 +282,12 @@ export async function runDurableScenario(input: DurableScenarioInput): Promise<A
         notes.push(`${task.id}: stale append refused (${code})`);
       }
     }
+  }
+
+  presentUnread(input.outcomeScript, env, deliveries, faults, notes, input.deliverBeforeAckTask, "pi-durable");
+  if (input.deliverBeforeAckTask !== undefined) {
+    presentUnread(input.outcomeScript, env, deliveries, faults, notes, undefined, "pi-durable");
+    notes.push(`${input.deliverBeforeAckTask}: re-presented after recovery`);
   }
 
   await sidecar.stop();
@@ -426,21 +454,9 @@ export async function runExistingScenario(input: ExistingScenarioInput): Promise
   // cursor after each, exactly as the branch's reconciliation does. A fault
   // after a delivery but before its cursor write leaves the row unread, so a
   // later reconciliation delivers the same logical note again.
-  const reconcile = (faultTask: string | undefined): void => {
-    const unread = readUnreadOutcomes(input.outcomeScript, env);
-    for (const row of unread) {
-      deliveries.push({ note: row.task, owner: "branch" });
-      if (faultTask !== undefined && row.task === faultTask) {
-        faults.push(`existing owner lost ${faultTask} after its routine note was delivered`);
-        notes.push(`${faultTask}: routine note delivered, cursor write failed, row still unread`);
-        return;
-      }
-      runOutcomeSync(input.outcomeScript, env, ["mark-read", "--through", String(row.seq)]);
-    }
-  };
-  reconcile(input.deliverBeforeAckTask);
+  presentUnread(input.outcomeScript, env, deliveries, faults, notes, input.deliverBeforeAckTask, "existing");
   if (input.deliverBeforeAckTask !== undefined) {
-    reconcile(undefined);
+    presentUnread(input.outcomeScript, env, deliveries, faults, notes, undefined, "existing");
     notes.push(`${input.deliverBeforeAckTask}: re-presented after recovery`);
   }
 

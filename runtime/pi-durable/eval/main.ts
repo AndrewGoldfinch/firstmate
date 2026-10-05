@@ -142,10 +142,7 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("");
   const gate = results.benefit.promotionGate;
   lines.push(
-    "Decision: HOLD - IMPLEMENTATION. Independent adversarial verification (docs/pi-durable/10-benefit-verification-2.md) found an Arm B duplicate under a legitimate interleaving; Phase 1 is not approved and the captain call is held as pi-durable-f09-scope.",
-  );
-  lines.push(
-    `The corrected experiment's 0/${results.benefit.runs} durable delivery count is structural: the harness measures arm B at the outcome-append boundary and never subjects it to the documented F09 delivery fault, so it cannot observe a duplicate delivery. Applying the F09 failed-cursor re-presentation to a durable-committed row, the durable arm re-presents the note (one duplicate delivery). The supported narrow claim is that the durable sink does not append a duplicate outcome row on replay; the broad claim that durable execution prevents duplicate externally visible deliveries is not supported, because delivery is a shared branch-loop property the sidecar does not change.`,
+    "Decision: HOLD - SCOPE / IMPLEMENTATION. The prototype successfully validates durable/idempotent outcome persistence, but that mechanism does not address the documented duplicate-delivery failure because routine-note presentation occurs downstream in a shared non-idempotent consumer.",
   );
   lines.push("");
   lines.push(
@@ -247,10 +244,13 @@ export function renderReport(results: EvaluationResults): string {
   );
   lines.push("");
   lines.push(
-    `Promotion gate (reduced-model lab result): duplicate externally visible delivery ${benefit.promotionGate.duplicateReduction ? "yes" : "no"}, durable arm prevented duplicates ${benefit.promotionGate.durablePrevented ? "yes" : "no"}, stale-owner refusal verified ${benefit.promotionGate.staleOwnerVerified ? "yes" : "no"}, recovery parity ${benefit.promotionGate.recoveryParity ? "yes" : "no"}, dedup-disabled control recreates the failure ${benefit.promotionGate.causalControlRecreated ? "yes" : "no"} -> ${benefit.promotionGate.verdict === "advance" ? "benefit demonstrated in the reduced model; promotion to Phase 1 proceeds with the residual full-Pi-fidelity risk recorded" : "not cleared, keep the HOLD decision"}.`,
+    `Promotion gate (reduced-model lab result): duplicate externally visible delivery ${benefit.promotionGate.duplicateReduction ? "yes" : "no"}, durable arm prevented duplicates ${benefit.promotionGate.durablePrevented ? "yes" : "no"}, durable replay appends exactly one row ${benefit.promotionGate.durableAppendDedup ? "yes" : "no"}, stale-owner refusal verified ${benefit.promotionGate.staleOwnerVerified ? "yes" : "no"}, recovery parity ${benefit.promotionGate.recoveryParity ? "yes" : "no"}, dedup-disabled control recreates the failure ${benefit.promotionGate.causalControlRecreated ? "yes" : "no"} -> ${benefit.promotionGate.verdict === "advance" ? "benefit demonstrated in the reduced model; promotion to Phase 1 proceeds with the residual full-Pi-fidelity risk recorded" : "not cleared, keep the HOLD decision"}.`,
   );
   lines.push(
     `Dedup-disabled causal control (same real store): with an operation key ${benefit.causalControl.withOperationKey} row(s); without one ${benefit.causalControl.withoutOperationKey} row(s).`,
+  );
+  lines.push(
+    "Claim status: PROVEN - durable execution prevents duplicate outcome appends caused by replay/retry (arm B's replayed append commits exactly one row per logical note in every run). NOT PROVEN (and currently false for F09) - durable execution prevents duplicate externally visible routine-note delivery (arm B re-presents the same note after the failed cursor write, exactly like arm A).",
   );
   lines.push(
     `Stale-owner check: ${benefit.staleOwner.attempts} superseded-owner attempt(s), ${benefit.staleOwner.accepted} accepted.`,

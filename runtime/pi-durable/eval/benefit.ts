@@ -10,11 +10,11 @@
  * One paired loop collects all measurements from the same runs:
  *
  * 1. Duplicate-delivery avoidance. The fault lands after a routine note is
- *    delivered and before its acknowledgement. On the existing path the row
- *    stays unread, so the next reconciliation delivers the same logical note a
- *    second time; the operation-keyed durable sink rejects the repeated
- *    settlement, so it delivers the note once. Every delivery is recorded at
- *    the delivery boundary in a non-idempotent ledger, never from a replay flag.
+ *    delivered and before its cursor write on both arms, so both stay unread and
+ *    the next reconciliation delivers the same logical note a second time. The
+ *    durable arm's replayed append still commits one outcome row, separating
+ *    append idempotence from delivery duplication. Every delivery is recorded at
+ *    the delivery boundary, never from a replay flag.
  * 2. Stale-owner refusal. After a genuine owner replacement the superseded
  *    owner attempts the append it could otherwise re-apply, so the
  *    zero-stale-owner clause is non-vacuous rather than hardcoded to pass.
@@ -43,6 +43,7 @@ export type BenefitRun = {
   durableDeliveries: number;
   existingDuplicateDeliveries: number;
   durableDuplicateDeliveries: number;
+  durableFaultTaskRows: number;
   existingHealthyMs: number;
   durableHealthyMs: number;
   existingFaultedMs: number;
@@ -89,6 +90,7 @@ export type BenefitResult = {
   promotionGate: {
     duplicateReduction: boolean;
     durablePrevented: boolean;
+    durableAppendDedup: boolean;
     staleOwnerVerified: boolean;
     recoveryParity: boolean;
     causalControlRecreated: boolean;
@@ -169,8 +171,8 @@ export async function runBenefit(
   runs = Number.parseInt(process.env.FM_PI_DURABLE_BENEFIT_RUNS ?? "", 10) || DEFAULT_RUNS,
 ): Promise<BenefitResult> {
   const predeclared = {
-    scenario: `six-task fleet, fault after the routine note on ${FAULT_TASK} is delivered and before its acknowledgement`,
-    fault: `existing: crash after the routine note on ${FAULT_TASK} is delivered, before its cursor write; pi-durable: owner lost after settlement on ${FAULT_TASK}`,
+    scenario: `six-task fleet, fault after the routine note on ${FAULT_TASK} is delivered and before its cursor write`,
+    fault: `both arms: crash after the routine note on ${FAULT_TASK} is delivered, before its cursor write; pi-durable additionally loses its owner after settlement on ${FAULT_TASK} so the settled append is replayed`,
     recoveryTimeThresholdPercent: RECOVERY_TIME_THRESHOLD_PERCENT,
     healthyTolerancePercent: HEALTHY_TOLERANCE_PERCENT,
   };
@@ -218,11 +220,12 @@ export async function runBenefit(
     const startedDurableFault = performance.now();
     const durableFaulted = await runDurableScenario({
       home: home(`run-${run}-durable-faulted`),
-      scenario: `fleet-crash-after-settle-${FAULT_TASK}`,
+      scenario: `fleet-crash-after-settle-deliver-before-ack-${FAULT_TASK}`,
       tasks: FLEET,
       outcomeScript,
       crashAfterSettleTask: FAULT_TASK,
       staleOwnerAfterSettleTask: FAULT_TASK,
+      deliverBeforeAckTask: FAULT_TASK,
     });
     const durableFaultedMs = performance.now() - startedDurableFault;
 
@@ -232,6 +235,7 @@ export async function runBenefit(
       durableDeliveries: durableFaulted.trace.deliveries.length,
       existingDuplicateDeliveries: duplicateDeliveryCount(existingFaulted),
       durableDuplicateDeliveries: duplicateDeliveryCount(durableFaulted),
+      durableFaultTaskRows: durableFaulted.trace.outcomes.filter((outcome) => outcome.task === FAULT_TASK).length,
       existingHealthyMs,
       durableHealthyMs,
       existingFaultedMs,
@@ -279,10 +283,11 @@ export async function runBenefit(
 
   const duplicateReduction = existingDuplicateRuns > 0 && duplicateDifference.lower > 0;
   const durablePrevented = durableDuplicateRuns === 0;
+  const durableAppendDedup = samples.every((sample) => sample.durableFaultTaskRows === 1);
   const staleNonVacuous = staleAttempts > 0;
   const staleOwnerVerified = staleNonVacuous && staleAccepted === 0;
   const promotion =
-    duplicateReduction && durablePrevented && staleOwnerVerified && recoveryParity && causalRecreated;
+    duplicateReduction && durablePrevented && durableAppendDedup && staleOwnerVerified && recoveryParity && causalRecreated;
 
   return {
     status: "pass",
@@ -316,6 +321,7 @@ export async function runBenefit(
     promotionGate: {
       duplicateReduction,
       durablePrevented,
+      durableAppendDedup,
       staleOwnerVerified,
       recoveryParity,
       causalControlRecreated: causalRecreated,
@@ -324,7 +330,8 @@ export async function runBenefit(
     samples,
     limits: [
       "arm A is a reduced model of the existing path: the real wake queue, claim rules, and append-only outcome store, plus the branch's unread-row delivery loop, but the deterministic responder instead of a Pi model turn",
-      "arm A records a delivery at each presentation from the store's unread rows; arm B records one when the durable sink commits a new outcome row, so both count the externally visible outcome at its own boundary",
+      "both arms record a delivery at each presentation from the store's unread rows and take the same failed-cursor fault, so both count the externally visible routine-note delivery at the shared delivery boundary",
+      "arm B's replayed append commits one outcome row per logical note, so the durable append path is observed as idempotent independently of delivery",
       "the fault lands once per run on one task; other fault points and interleavings are covered by the correctness matrix, not this benefit sample",
       "operator burden is deliberately not measured here and is not part of the gate; a real operator-burden study belongs to Phase 1",
       "the recovery-time threshold is derived from this lab's own run-to-run spread, so it is a local noise floor, not a production service-level objective",

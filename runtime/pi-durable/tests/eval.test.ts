@@ -60,23 +60,32 @@ test("the deterministic harness grades both arms and rejects every corrupted tra
   assert.equal(results.calibration.samples.length, 2);
   assert.ok(results.calibration.thresholds.recoveryTimeReductionPercent >= 30);
 
-  // Benefit validation: the delivery-before-ack fault must duplicate the
-  // existing path's routine-note delivery and must be replayed once by the
-  // durable sink, with recovery parity, a non-vacuous stale-owner refusal, and
-  // the dedup-disabled control recreating the failure.
+  // Benefit validation: the failed-cursor fault must present the same routine
+  // note twice on both arms, while the durable arm's replayed append still
+  // commits exactly one row. The promotion gate must hold on the duplicate
+  // externally visible delivery even though the append path is idempotent.
   assert.equal(results.benefit.status, "pass");
   assert.equal(results.benefit.runs, 2);
   assert.ok(
     results.benefit.duplicateDeliveries.existing.successes > 0,
-    "arm A must show a duplicate externally visible delivery after the delivery-before-ack fault",
+    "arm A must show a duplicate externally visible delivery after the failed-cursor fault",
   );
-  assert.equal(results.benefit.duplicateDeliveries.durable.successes, 0, "arm B must replay without a duplicate delivery");
+  assert.ok(
+    results.benefit.duplicateDeliveries.durable.successes > 0,
+    "arm B must re-present the same routine note after the failed cursor write",
+  );
+  assert.equal(
+    results.benefit.samples.every((sample) => sample.durableFaultTaskRows === 1),
+    true,
+    "arm B's replayed append must commit exactly one outcome row",
+  );
   assert.equal(results.benefit.promotionGate.recoveryParity, true);
-  assert.equal(results.benefit.promotionGate.durablePrevented, true);
+  assert.equal(results.benefit.promotionGate.durableAppendDedup, true);
+  assert.equal(results.benefit.promotionGate.durablePrevented, false);
   assert.equal(results.benefit.promotionGate.staleOwnerVerified, true);
   assert.ok(results.benefit.staleOwner.attempts > 0, "the stale-owner test must be non-vacuous");
   assert.equal(results.benefit.staleOwner.accepted, 0);
   assert.equal(results.benefit.promotionGate.causalControlRecreated, true);
-  assert.equal(results.benefit.promotionGate.duplicateReduction, true);
-  assert.equal(results.benefit.promotionGate.verdict, "advance");
+  assert.equal(results.benefit.promotionGate.duplicateReduction, false);
+  assert.equal(results.benefit.promotionGate.verdict, "hold");
 });

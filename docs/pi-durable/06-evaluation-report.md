@@ -1,11 +1,10 @@
 # Pi Durable evaluation report (P2)
 
-Generated 2026-10-05T04:34:23.595Z.
+Generated 2026-10-05T05:11:58.154Z.
 
 ## Decision
 
-Decision: HOLD - IMPLEMENTATION. Independent adversarial verification (docs/pi-durable/10-benefit-verification-2.md) found an Arm B duplicate under a legitimate interleaving; Phase 1 is not approved and the captain call is held as pi-durable-f09-scope.
-The corrected experiment's 0/30 durable delivery count is structural: the harness measures arm B at the outcome-append boundary and never subjects it to the documented F09 delivery fault, so it cannot observe a duplicate delivery. Applying the F09 failed-cursor re-presentation to a durable-committed row, the durable arm re-presents the note (one duplicate delivery). The supported narrow claim is that the durable sink does not append a duplicate outcome row on replay; the broad claim that durable execution prevents duplicate externally visible deliveries is not supported, because delivery is a shared branch-loop property the sidecar does not change.
+Decision: HOLD - SCOPE / IMPLEMENTATION. The prototype successfully validates durable/idempotent outcome persistence, but that mechanism does not address the documented duplicate-delivery failure because routine-note presentation occurs downstream in a shared non-idempotent consumer.
 
 Decision rule: advance to Phase 1 if and only if independent observation shows the existing path can produce duplicate externally visible outcomes under the tested fault, durable execution prevents them across the adversarial interleavings, the stale-owner test is non-vacuous, and the dedup-disabled control still recreates the failure. Operator burden is not part of the gate. Recovery time is an observation, not a claimed benefit.
 Residual risk carried forward verbatim: "full Pi integration fidelity has not been empirically validated because the live SDK cannot be exercised in the prototype environment; Phase 1 must validate this against the real execution path before broader adoption."
@@ -94,54 +93,56 @@ The model matched the fixture's required disposition on 5 of 6 tasks, so a real 
 ## Benefit validation (promotion gate)
 
 Status: pass over 30 paired runs. Predeclared N: 30.
-Scenario: six-task fleet, fault after the routine note on T3 is delivered and before its acknowledgement.
-Fault: existing: crash after the routine note on T3 is delivered, before its cursor write; pi-durable: owner lost after settlement on T3.
+Scenario: six-task fleet, fault after the routine note on T3 is delivered and before its cursor write.
+Fault: both arms: crash after the routine note on T3 is delivered, before its cursor write; pi-durable additionally loses its owner after settlement on T3 so the settled append is replayed.
 
 | Experiment | Arm A existing | Arm B pi-durable | Difference (A - B) | Verdict |
 | --- | --- | --- | --- | --- |
-| Duplicate externally visible delivery | 30 duplicates in 30/30 runs (100%, 95% CI 88.6%-100%) | 0 duplicates in 0/30 runs (0%, 95% CI 0%-11.4%) | 100% points, 95% CI 83.9%-100% | improved |
-| Recovery time (observation, not a claimed benefit) | median 1256 ms (range 1235-1281) | median 718 ms (range 707-795) | durable arm median recovery was 718 ms vs 1256 ms for the existing-path model; performance benefit is not claimed because the experiment was designed for correctness rather than latency measurement | observation |
+| Duplicate externally visible delivery | 30 duplicates in 30/30 runs (100%, 95% CI 88.6%-100%) | 30 duplicates in 30/30 runs (100%, 95% CI 88.6%-100%) | 0% points, 95% CI -11.4%-11.4% | unproven |
+| Recovery time (observation, not a claimed benefit) | median 1311 ms (range 1228-1383) | median 841 ms (range 785-902) | durable arm median recovery was 841 ms vs 1311 ms for the existing-path model; performance benefit is not claimed because the experiment was designed for correctness rather than latency measurement | observation |
 
-Promotion gate (reduced-model lab result): duplicate externally visible delivery yes, durable arm prevented duplicates yes, stale-owner refusal verified yes, recovery parity yes, dedup-disabled control recreates the failure yes -> benefit demonstrated in the reduced model; promotion to Phase 1 proceeds with the residual full-Pi-fidelity risk recorded.
+Promotion gate (reduced-model lab result): duplicate externally visible delivery no, durable arm prevented duplicates no, durable replay appends exactly one row yes, stale-owner refusal verified yes, recovery parity yes, dedup-disabled control recreates the failure yes -> not cleared, keep the HOLD decision.
 Dedup-disabled causal control (same real store): with an operation key 1 row(s); without one 2 row(s).
+Claim status: PROVEN - durable execution prevents duplicate outcome appends caused by replay/retry (arm B's replayed append commits exactly one row per logical note in every run). NOT PROVEN (and currently false for F09) - durable execution prevents duplicate externally visible routine-note delivery (arm B re-presents the same note after the failed cursor write, exactly like arm A).
 Stale-owner check: 30 superseded-owner attempt(s), 0 accepted.
 
 | Run | Arm A faulted (ms) | Arm B faulted (ms) | Arm A deliveries | Arm B deliveries | Arm A duplicate deliveries | Arm B duplicate deliveries |
 | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 1256 | 710 | 7 | 6 | 1 | 0 |
-| 1 | 1243 | 711 | 7 | 6 | 1 | 0 |
-| 2 | 1242 | 711 | 7 | 6 | 1 | 0 |
-| 3 | 1256 | 726 | 7 | 6 | 1 | 0 |
-| 4 | 1235 | 795 | 7 | 6 | 1 | 0 |
-| 5 | 1267 | 712 | 7 | 6 | 1 | 0 |
-| 6 | 1261 | 718 | 7 | 6 | 1 | 0 |
-| 7 | 1271 | 729 | 7 | 6 | 1 | 0 |
-| 8 | 1252 | 739 | 7 | 6 | 1 | 0 |
-| 9 | 1252 | 729 | 7 | 6 | 1 | 0 |
-| 10 | 1256 | 718 | 7 | 6 | 1 | 0 |
-| 11 | 1257 | 718 | 7 | 6 | 1 | 0 |
-| 12 | 1252 | 710 | 7 | 6 | 1 | 0 |
-| 13 | 1240 | 717 | 7 | 6 | 1 | 0 |
-| 14 | 1247 | 713 | 7 | 6 | 1 | 0 |
-| 15 | 1257 | 715 | 7 | 6 | 1 | 0 |
-| 16 | 1257 | 721 | 7 | 6 | 1 | 0 |
-| 17 | 1253 | 714 | 7 | 6 | 1 | 0 |
-| 18 | 1257 | 718 | 7 | 6 | 1 | 0 |
-| 19 | 1281 | 734 | 7 | 6 | 1 | 0 |
-| 20 | 1279 | 732 | 7 | 6 | 1 | 0 |
-| 21 | 1271 | 726 | 7 | 6 | 1 | 0 |
-| 22 | 1249 | 707 | 7 | 6 | 1 | 0 |
-| 23 | 1245 | 720 | 7 | 6 | 1 | 0 |
-| 24 | 1258 | 718 | 7 | 6 | 1 | 0 |
-| 25 | 1251 | 712 | 7 | 6 | 1 | 0 |
-| 26 | 1249 | 726 | 7 | 6 | 1 | 0 |
-| 27 | 1264 | 720 | 7 | 6 | 1 | 0 |
-| 28 | 1272 | 724 | 7 | 6 | 1 | 0 |
-| 29 | 1253 | 721 | 7 | 6 | 1 | 0 |
+| 0 | 1233 | 804 | 7 | 7 | 1 | 1 |
+| 1 | 1242 | 793 | 7 | 7 | 1 | 1 |
+| 2 | 1281 | 790 | 7 | 7 | 1 | 1 |
+| 3 | 1261 | 819 | 7 | 7 | 1 | 1 |
+| 4 | 1245 | 795 | 7 | 7 | 1 | 1 |
+| 5 | 1235 | 797 | 7 | 7 | 1 | 1 |
+| 6 | 1261 | 790 | 7 | 7 | 1 | 1 |
+| 7 | 1235 | 786 | 7 | 7 | 1 | 1 |
+| 8 | 1228 | 789 | 7 | 7 | 1 | 1 |
+| 9 | 1237 | 785 | 7 | 7 | 1 | 1 |
+| 10 | 1272 | 805 | 7 | 7 | 1 | 1 |
+| 11 | 1250 | 808 | 7 | 7 | 1 | 1 |
+| 12 | 1304 | 841 | 7 | 7 | 1 | 1 |
+| 13 | 1307 | 858 | 7 | 7 | 1 | 1 |
+| 14 | 1323 | 841 | 7 | 7 | 1 | 1 |
+| 15 | 1311 | 846 | 7 | 7 | 1 | 1 |
+| 16 | 1336 | 902 | 7 | 7 | 1 | 1 |
+| 17 | 1340 | 866 | 7 | 7 | 1 | 1 |
+| 18 | 1338 | 856 | 7 | 7 | 1 | 1 |
+| 19 | 1310 | 868 | 7 | 7 | 1 | 1 |
+| 20 | 1323 | 855 | 7 | 7 | 1 | 1 |
+| 21 | 1383 | 853 | 7 | 7 | 1 | 1 |
+| 22 | 1348 | 855 | 7 | 7 | 1 | 1 |
+| 23 | 1339 | 853 | 7 | 7 | 1 | 1 |
+| 24 | 1335 | 847 | 7 | 7 | 1 | 1 |
+| 25 | 1321 | 838 | 7 | 7 | 1 | 1 |
+| 26 | 1322 | 860 | 7 | 7 | 1 | 1 |
+| 27 | 1334 | 841 | 7 | 7 | 1 | 1 |
+| 28 | 1328 | 868 | 7 | 7 | 1 | 1 |
+| 29 | 1311 | 856 | 7 | 7 | 1 | 1 |
 
 Benefit-validation limits:
 - arm A is a reduced model of the existing path: the real wake queue, claim rules, and append-only outcome store, plus the branch's unread-row delivery loop, but the deterministic responder instead of a Pi model turn.
-- arm A records a delivery at each presentation from the store's unread rows; arm B records one when the durable sink commits a new outcome row, so both count the externally visible outcome at its own boundary.
+- both arms record a delivery at each presentation from the store's unread rows and take the same failed-cursor fault, so both count the externally visible routine-note delivery at the shared delivery boundary.
+- arm B's replayed append commits one outcome row per logical note, so the durable append path is observed as idempotent independently of delivery.
 - the fault lands once per run on one task; other fault points and interleavings are covered by the correctness matrix, not this benefit sample.
 - operator burden is deliberately not measured here and is not part of the gate; a real operator-burden study belongs to Phase 1.
 - the recovery-time threshold is derived from this lab's own run-to-run spread, so it is a local noise floor, not a production service-level objective.
@@ -151,10 +152,10 @@ Benefit-validation limits:
 | Benefit | Metric | Arm A | Arm B | Status |
 | --- | --- | --- | --- | --- |
 | Reliable recovery | Correct dispositions / fleet tasks | all | all | parity |
-| Duplicate-delivery avoidance | Duplicate externally visible deliveries (paired fault runs) | 30 | 0 | improved |
+| Duplicate-delivery avoidance | Duplicate externally visible deliveries (paired fault runs) | 30 | 30 | unproven |
 | Controlled ownership | Accepted stale-owner actions | 0 | 0 | pass |
 | Useful visibility | Recoverable settlements | n/a | 6 | pass |
-| Recovery time (observation, not a claimed benefit) | Median faulted-scenario time (ms) | 1256 | 718 | observation |
+| Recovery time (observation, not a claimed benefit) | Median faulted-scenario time (ms) | 1311 | 841 | observation |
 
 ## Threshold calibration
 
