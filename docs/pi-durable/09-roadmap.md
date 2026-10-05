@@ -11,10 +11,10 @@ Two layers, named apart from now on:
 | --- | --- |
 | Prototype 0 — Durable Outcome persistence | **Complete.** Claim proven; frozen; no further work on append dedup. |
 | Spike 1 — make real-path F09 reproducible | **Complete.** See [`development.md`](development.md) "Spike 1 — real-path F09 reproduction"; the real Pi reconcile path reproduces F09 headlessly (`tests/fm-pi-branch-extension.test.sh`). |
-| Prototype 1 — Durable Delivery boundary | **Verified (ADVANCE), pending Phase 1 call.** Durable delivery identity landed (`3d8cf6c4`); independent verification found a streaming defect (`11-delivery-verification.md`), fixed by persisting the record synchronously before the cursor advances (`44714b57`), and re-verified ADVANCE (`12-delivery-verification-2.md`) with one residual below. |
-| Phase 1 adoption | Gate met under normal persistence; captain call held (`pi-durable-phase1-approval`) with the residual hardening tracked. |
+| Prototype 1 — Durable Delivery boundary | **HOLD - IMPLEMENTATION under the end-to-end invariants.** The real-SDK probe confirms same-file F09 recovery, but reproduces lost delivery and a stale-owner append after takeover; see [`13-real-sdk-delivery-probe.md`](13-real-sdk-delivery-probe.md). |
+| Phase 1 adoption | **Dormant.** The prior conditional ADVANCE did not establish no-loss or concurrent-takeover safety; the new probe leaves those gates unsatisfied. |
 
-## Prototype 1 — Durable Delivery boundary (verified)
+## Prototype 1 — Durable Delivery boundary (conditional verification superseded)
 
 Durable delivery identity for routine notes is opt-in (`FM_PI_DURABLE_DELIVERY`): a routine note stores its own delivery record keyed by store `seq`, so a reload finds it and delivers nothing again; a sequence match with different content fails closed; the default path is unchanged.
 
@@ -22,7 +22,11 @@ Durable delivery identity for routine notes is opt-in (`FM_PI_DURABLE_DELIVERY`)
 
 **Fix:** the routine delivery record is now a synchronous `appendEntry` (mirroring the captain visible-outcome path), persisted before `mark-read` can cross it, with its own entry renderer (`44714b57`). Independent re-verification (`12-delivery-verification-2.md`) returns **ADVANCE**: with normal persistence the F09 window delivers exactly once with no duplicate and no loss, the deferred queue is unused, the default path is unchanged, and conflicts fail closed.
 
-**Residual (tracked, inherited):** `ensureRoutineOutcome` verifies persistence via in-memory `getEntries()`, not the session file, so a storage write failure or a fresh-session no-conversation window can still lose a note while the store says read; the same structure exists in the captain path. Hardening is filed as `pi-durable-durable-verify-hardening`; Phase 1 promotion is a captain call (`pi-durable-phase1-approval`).
+**Current evidence:** the real-SDK probe confirms both persistence-loss paths and demonstrates that an old consumer paused after its ownership check can append and render after a replacement delivers to the same session file.
+A replacement session also receives another copy if the original delivery's cursor write failed.
+These are delivery-boundary defects or unresolved destination semantics, not outcome-append defects.
+The smallest follow-up requirements and experiment limits are recorded in [`13-real-sdk-delivery-probe.md`](13-real-sdk-delivery-probe.md).
+No delivery fix or Phase 1 activation is included in that probe.
 
 ## Prototype 0 — Durable Outcome persistence (complete)
 
@@ -30,7 +34,7 @@ Proven claim: durable execution prevents duplicate outcome **appends** caused by
 
 Evidence: `docs/pi-durable/06-evaluation-report.md`; verifications `08-benefit-verification.md` and `10-benefit-verification-2.md`; the symmetric lane in `06` (existing 30/30 vs durable 30/30 duplicate deliveries, one stored row on durable replay).
 
-## Spike 1 — make real-path F09 reproducible (next)
+## Spike 1 — make real-path F09 reproducible (completed)
 
 Before changing any contract, reproduce the exact sequence through the **real Pi extension**:
 
@@ -59,6 +63,7 @@ Advance only when the real Pi path demonstrates that a committed routine note is
 
 ## Residual risk carried forward
 
-Full Pi integration fidelity has not been empirically validated because the live SDK cannot be exercised in the prototype environment; Spike 1 is the mandatory validation of that risk before Prototype 1.
+The installed SDK, extension, session files, and headless transcript renderer are now exercised directly by the [real-SDK probe](13-real-sdk-delivery-probe.md).
+Its lifecycle triggers and ownership replacement are controlled by the lab; it does not establish full live-model, terminal, lock-acquisition-protocol, or host-reboot fidelity.
 
 Design analysis: `data/pi-durable-f09-design/report.md` (FirstMate home).

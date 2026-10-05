@@ -441,6 +441,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/13-real-sdk-delivery-probe.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },

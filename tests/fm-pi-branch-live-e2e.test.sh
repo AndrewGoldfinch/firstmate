@@ -28,6 +28,8 @@
 # placeholder key for their never-contacted fake provider. Run after
 # every Pi upgrade and before trusting refreshed per-harness evidence
 # (docs/verification/runtime-backends.md).
+# FM_PI_F09_ONLY=1 runs only the disk-backed delivery investigation below.
+# FM_PI_F09_OUTPUT optionally retains its JSON observations outside the temp lab.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -56,6 +58,7 @@ cp "$ROOT/.pi/extensions/lib/fm-async-exec.ts" "$repo/.pi/extensions/lib/fm-asyn
 cp "$ROOT/.pi/extensions/lib/fm-branch-model-picker.ts" "$repo/.pi/extensions/lib/fm-branch-model-picker.ts"
 cp "$ROOT/.pi/extensions/lib/fm-calm-visibility.ts" "$repo/.pi/extensions/lib/fm-calm-visibility.ts"
 cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$repo/.pi/extensions/lib/fm-operational-input.ts"
+cp "$ROOT/.pi/extensions/lib/fm-execution-provider.ts" "$repo/.pi/extensions/lib/fm-execution-provider.ts"
 mkdir -p "$repo/bin"
 cp "$ROOT/bin/fm-operational-input.sh" "$repo/bin/fm-operational-input.sh"
 cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -82,6 +85,21 @@ ln -s "$PI_PACKAGE_DIR" "$repo/node_modules/@earendil-works/pi-coding-agent"
 ln -s "$PI_PACKAGE_DIR/node_modules/@earendil-works/pi-tui" "$repo/node_modules/@earendil-works/pi-tui"
 ln -s "$PI_PACKAGE_DIR/node_modules/@earendil-works/pi-ai" "$repo/node_modules/@earendil-works/pi-ai"
 ln -s "$PI_PACKAGE_DIR/node_modules/typebox" "$repo/node_modules/typebox"
+
+run_f09_probe() {
+  FM_F09_LAB="$TMP_ROOT/f09" FM_F09_PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" \
+    FM_F09_ROOT="$ROOT" PI_PACKAGE_DIR="$PI_PACKAGE_DIR" \
+    node "$ROOT/tests/assets/pi-f09-probe.mjs" > "$TMP_ROOT/f09-output" 2>&1
+  local status=$?
+  cat "$TMP_ROOT/f09-output"
+  [ "$status" -eq 0 ] || fail "F09 probe failed to complete against Pi $PI_VERSION"
+  pass "real Pi SDK $PI_VERSION F09 observations collected (counterexamples are not promotion passes)"
+}
+
+if [ "${FM_PI_F09_ONLY:-0}" = 1 ]; then
+  run_f09_probe
+  exit 0
+fi
 
 # Stock macOS Bash 3.2 cannot reliably parse JavaScript template literals in a
 # heredoc nested inside command substitution, so capture through a file.
@@ -1100,3 +1118,5 @@ if [ "$status" -ne 0 ] || [ "$out" != "RETRY_OK" ]; then
 fi
 done
 pass "real Pi SDK $PI_VERSION suppresses only empty or exact-repeat retry finals, retains first and differing replies after reopen, buffers retry streaming, and keeps outcomes retryable"
+
+run_f09_probe
