@@ -101,7 +101,7 @@ export async function runEvaluation(workDir = mkdtempSync(join(tmpdir(), "fm-pi-
 
   return {
     generatedAt: new Date().toISOString(),
-    environment: `Node ${process.version}; local Linux host; deterministic faux model for both arms; disposable-container restart lane for the process-crash and store-reopen boundaries; bounded real-model pilot when a provider credential is reachable`,
+    environment: `Node ${process.version}; local Linux host; deterministic responder for both arms; arm A drives the real wake queue, claim rules, and append-only outcome store; disposable-container restart lane for the process-crash and store-reopen boundaries; bounded real-model pilot when a provider credential is reachable`,
     arms: { existing, "pi-durable": durable, existingWithFault, "pi-durableWithFault": durableWithFault },
     grades,
     negativeControls: negative,
@@ -138,8 +138,9 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("");
   lines.push(results.environment);
   lines.push("A disposable-container restart lane provides the process-crash and store-reopen boundaries; no real VM or OS reboot boundary exists, and every case this environment cannot exercise is recorded as not-covered, never faked.");
-  lines.push("Arm A is a reduced model of the existing in-process path: it uses the real outcome store and wake semantics but not the full Pi supervision extension.");
-  lines.push("Arm B is the real durable sidecar, bridge, and outcome sink with a deterministic faux model.");
+  lines.push("Arm A is the real pinned existing Pi supervision path as far as this environment allows: it drives the real wake queue and lease/claim rules (bin/fm-wake-lib.sh, bin/fm-branch-dispatch.mjs) and the real append-only outcome store (bin/fm-branch-outcome.sh).");
+  lines.push("Arm B is the real durable sidecar, bridge, and outcome sink with the same deterministic responder.");
+  lines.push("A full Pi AgentSession cannot be driven headlessly here, so arm A's wake is answered by the deterministic responder rather than a Pi model turn; the wake queue, claim rules, and outcome store it drives are the real ones.");
   lines.push("Correctness evidence is initial contracts tested; important correctness gaps remain, so the prototype stays experimental.");
   lines.push("Socket-dependent tests are environment-sensitive: the reviewer's environment blocked Unix-socket listeners (listen EPERM), so a run without socket support records those cases as not-covered rather than passing them.");
   lines.push("");
@@ -268,16 +269,16 @@ export function renderReport(results: EvaluationResults): string {
   lines.push("");
   lines.push("## Honest limitations");
   lines.push("");
-  lines.push("- Arm A is a reduced model, not the full pinned Pi supervision extension; it demonstrates the durability gap of an in-process owner without durable acceptance, and does not exercise the extension's own recovery.");
-  lines.push("- The faux model returns fixture truth, so this harness measures execution durability, not model judgment.");
-  lines.push("- F09 is not covered here: the routine-note delivery limitation is documented rather than re-tested.");
+  lines.push("- Arm A is not a full Pi AgentSession: the wake is answered by the deterministic responder instead of a Pi model turn, so the extension's model-side behavior is not exercised; the wake queue, claim rules, and outcome store it drives are the real ones.");
+  lines.push("- The deterministic responder returns fixture truth, so this harness measures execution durability, not model judgment.");
+  lines.push("- F09 is exercised against the real store: a routine note has no durable idempotent record, so a failed cursor write re-presents the already-delivered row. The limitation is pinned by the targeted test and tracked as follow-up `fm-pi-routine-delivery-idempotency-followup-r1`.");
   lines.push("- The outcome sink is keyed by the operation identity with an atomic append-or-return-existing, so two distinct operations with identical text no longer collide; the evaluation's duplicate-outcome comparison still only subtracts total outcome counts between arms and does not establish the absence of duplicates.");
   lines.push("- The container lane shares the host pid namespace on purpose, because the runtime ownership lock records a pid and treats a live pid as a live owner; a containerized restart inside its own pid namespace would need an explicit lock reclaim first.");
   lines.push("- The container lane is a process and store boundary, not an OS reboot: it proves the store reopens and the recorded authority reconciles, not that a kernel or filesystem failure is survivable.");
   lines.push("- The pilot's answers vary between runs, so its disposition match count is one sample rather than a rate.");
   lines.push("- The real-model pilot asks one shared set of model answers and replays them through both arms, so it isolates execution durability rather than measuring per-arm model variance; independent per-arm model calls remain the fuller form the design describes.");
   lines.push("- The pilot drives the pinned provider directly because the durable conversation seam does not carry the session-affinity header the provider requires, so it does not exercise the prototype's execution seam end to end.");
-  lines.push("- F16 exercises credential reachability, not an injected missing-credential or incompatible-dependency failure; F17 is a container process/store restart, not a host reboot; F18 exercises a wrong-home refusal, not a store restored into another home. Those cases are marked known-gap rather than pass.");
+  lines.push("- F16 injects a registered provider with no configured credential and the dispatch refuses with PROVIDER_UNAVAILABLE without invoking the registered fallback executor; F17 is a container process/store restart whose boundary is a container restart, not a host kernel reboot; F18 restores a copy of the adapter store into a different home and the owner refuses to open it (HOME_MISMATCH). F16 and F18 now pass; F17 stays a known-gap because no host reboot is exercised.");
   lines.push("- The milestone verification drives two successive wakes, an execution crash with resume, and an ownership replacement through the extension's durable-branch path and the real sidecar; it verifies exactly one outcome per accepted operation, no stale append, and distinct identities. Socket-dependent tests are environment-sensitive (the reviewer's environment blocked Unix-socket listeners with listen EPERM).");
   lines.push("- Token and cost comparison and the operator diagnosis study from the design remain out of scope for this pass.");
   lines.push("- The calibrated thresholds are derived from this lab's own run-to-run spread, and the deterministic arms are byte-identical workloads, so a measured recovery-time improvement would have to exceed several times the noise floor before it counts as proven.");

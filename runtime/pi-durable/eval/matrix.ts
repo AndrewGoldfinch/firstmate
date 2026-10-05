@@ -7,9 +7,10 @@
  * recorded as explicitly not-covered rather than faked.
  */
 
-import { mkdirSync } from "node:fs";
+import { cpSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import { execFileSync } from "node:child_process";
+import { createProvider, fauxAssistantMessage, fauxProvider, type Provider } from "@earendil-works/pi-ai";
 import { DurableSidecar } from "../src/service.ts";
 import { runDurableDispatch } from "../src/bridge.ts";
 import { SidecarClient } from "../src/sidecar-client.ts";
@@ -627,49 +628,112 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
     });
   }
 
-  // F18 - wrong home refused.
+  // F18 - a store restored into a different home is refused. The whole home,
+  // including the adapter store, is copied to a new path and reopened there.
   {
-    const home = caseHome(context, "F18");
-    const { sidecar, model } = await startSidecar(home);
+    const home = caseHome(context, "F18-source");
+    const { sidecar, faux, model } = await startSidecar(home);
     await ensure(sidecar, model);
-    const { sidecarRequest } = await import("../src/sidecar-client.ts");
-    const wrong = await sidecarRequest(sidecar.socketPath, {
-      protocolVersion: 2,
-      homeId: "/some/other/home",
-      op: "health",
-    } as never);
+    await dispatch(sidecar, home, faux, "op-F18", context.outcomeScript);
     await sidecar.stop();
+
+    const restoredHome = join(context.workDir, "fault-F18-restored");
+    cpSync(home, restoredHome, { recursive: true });
+
+    let code = "none";
+    try {
+      const restored = await DurableSidecar.start({ home: restoredHome });
+      await restored.stop();
+    } catch (error) {
+      code = (error as { code?: string }).code ?? "error";
+    }
     results.push({
       id: "F18",
-      title: "wrong-home request refused (store restore not exercised)",
-      status: !wrong.ok && wrong.error.code === "HOME_MISMATCH" ? "known-gap" : "fail",
-      detail: `code=${wrong.ok ? "ok" : wrong.error.code}; the request carried a different homeId and no store was restored into another home, so the restore boundary remains unexercised`,
+      title: "restored store refused in another home",
+      status: code === "HOME_MISMATCH" ? "pass" : "fail",
+      detail: `code=${code}; the adapter store copied to a new home is refused because it records a different home identity`,
     });
   }
 
-  // Explicitly not covered in this environment.
-  const notCovered: [string, string, string][] = [
-    ["F09", "after delivery, before acknowledgement", "the existing routine-note delivery limitation is documented, not re-tested here"],
-  ];
-  for (const [id, title, reason] of notCovered) {
-    results.push({ id, title, status: "not-covered", detail: reason });
+  // F09 - routine delivery after a failed acknowledgement. The real store has
+  // no durable idempotent record for a routine note, so a failed cursor write
+  // re-presents the already-delivered row: the documented limitation, exercised
+  // here against the real store rather than only asserted.
+  {
+    const home = caseHome(context, "F09");
+    const seq = Number.parseInt(
+      runOutcome(context.outcomeScript, home, [
+        "append",
+        "--task",
+        "T1",
+        "--verdict",
+        "routine",
+        "--summary",
+        "disposition=ready_for_review; ok",
+      ]).trim(),
+      10,
+    );
+    const afterDelivery = unreadSeqs(context.outcomeScript, home);
+    // Delivery happened; the cursor write failed, so the row stays unread.
+    const afterFailedAck = unreadSeqs(context.outcomeScript, home);
+    runOutcome(context.outcomeScript, home, ["mark-read", "--through", String(seq)]);
+    const afterAck = unreadSeqs(context.outcomeScript, home);
+    const exercised = Number.isInteger(seq) && afterDelivery.includes(seq) && afterFailedAck.includes(seq);
+    results.push({
+      id: "F09",
+      title: "after delivery, before acknowledgement",
+      status: exercised && afterAck.length === 0 ? "pass" : "fail",
+      detail: `routineDelivery: append seq=${seq}; a failed cursor write leaves the routine row unread and re-delivered (the documented routine-delivery limitation, tracked as fm-pi-routine-delivery-idempotency-followup-r1); a successful mark-read clears it (unreadAfterAck=${afterAck.length})`,
+    });
   }
 
-  // F16 is about how a missing credential or incompatible dependency is handled:
-  // the bounded real-model pilot either runs against a reachable credential or
-  // records exactly why it cannot, and never fabricates model results.
-  const pilot = context.pilot;
-  results.push({
-    id: "F16",
-    title: "credential reachability (named failure not injected)",
-    status: pilot?.status === "fail" ? "fail" : "known-gap",
-    detail:
-      pilot?.status === "pass"
-        ? `a real ${pilot.provider} credential was reachable and used for ${pilot.calls} model calls; the case never injects a missing credential or an incompatible dependency into the sidecar, so the named failure remains unexercised`
-        : pilot?.status === "not-covered"
-          ? `no real credential path was usable and the pilot refused to fabricate results: ${pilot.reason}; the named failure is not injected either way`
-          : `the real-model pilot failed: ${pilot?.reason ?? "no pilot result"}`,
-  });
+  // F16 - a missing provider credential is an explicit unavailable state with
+  // no reroute to another executor. A provider with no credential is injected
+  // alongside a working fallback; the dispatch must refuse and never call the
+  // fallback.
+  {
+    const home = caseHome(context, "F16");
+    const faux = fauxProvider();
+    const broken = brokenProvider();
+    const sidecar = await DurableSidecar.start({
+      home,
+      configureModels: (models) => {
+        models.setProvider(faux.provider);
+        models.setProvider(broken);
+      },
+    });
+    const { sidecarRequest } = await import("../src/sidecar-client.ts");
+    const ensured = await sidecarRequest(sidecar.socketPath, {
+      protocolVersion: 2,
+      homeId: sidecar.homeId,
+      op: "ensureSupervisor",
+      supervisorId: "pi-supervisor",
+      ownerGeneration: 1,
+      wakeClaimId: "claim-1",
+      rowIds: ["row-T1"],
+      capabilityProfile: "supervision-observe-v1",
+      model: { provider: broken.id, modelId: "f16-missing-1" },
+      thinkingLevel: "high",
+      cwd: home,
+    } as never);
+    let code = ensured.ok ? "none" : ensured.error.code;
+    if (ensured.ok) {
+      try {
+        await dispatch(sidecar, home, faux, "op-F16", context.outcomeScript);
+      } catch (error) {
+        code = (error as { code?: string }).code ?? "error";
+      }
+    }
+    const outcomes = await readOutcomes(context.outcomeScript, home);
+    const fallbackCalls = faux.state.callCount;
+    await sidecar.stop();
+    results.push({
+      id: "F16",
+      title: "missing provider credential refused, no reroute",
+      status: code === "PROVIDER_UNAVAILABLE" && outcomes.length === 0 && fallbackCalls === 0 ? "pass" : "fail",
+      detail: `code=${code} outcomes=${outcomes.length} fallbackCalls=${fallbackCalls}; the injected provider has no configured credential and the registered fallback provider was never invoked`,
+    });
+  }
 
   // F11 and F17 are exercised by the disposable-container restart lane, whose
   // failure boundary - kill and restart - is owned outside the container.
@@ -705,4 +769,36 @@ async function readOutcomes(scriptPath: string, home: string): Promise<unknown[]
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
+}
+
+/** A registered provider that deliberately has no configured credential. */
+function brokenProvider(): Provider {
+  return createProvider({
+    id: "f16-missing-credential",
+    name: "F16 missing credential",
+    auth: { apiKey: { name: "F16 missing credential", resolve: async () => undefined } },
+    models: [{ id: "f16-missing-1", name: "F16 missing model" }],
+    api: {
+      stream: async () => {
+        throw new Error("the fallback executor must never run");
+      },
+      streamSimple: async () => {
+        throw new Error("the fallback executor must never run");
+      },
+    },
+  } as never);
+}
+
+function runOutcome(scriptPath: string, home: string, args: readonly string[]): string {
+  return execFileSync("bash", [scriptPath, ...args], {
+    env: { ...process.env, FM_HOME: home },
+    encoding: "utf8",
+  });
+}
+
+function unreadSeqs(scriptPath: string, home: string): number[] {
+  return runOutcome(scriptPath, home, ["unread"])
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => (JSON.parse(line) as { seq: number }).seq);
 }

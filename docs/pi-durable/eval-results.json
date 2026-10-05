@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-04T22:49:19.209Z",
-  "environment": "Node v22.21.1; local Linux host; deterministic faux model for both arms; disposable-container restart lane for the process-crash and store-reopen boundaries; bounded real-model pilot when a provider credential is reachable",
+  "generatedAt": "2026-10-05T00:05:33.037Z",
+  "environment": "Node v22.21.1; local Linux host; deterministic responder for both arms; arm A drives the real wake queue, claim rules, and append-only outcome store; disposable-container restart lane for the process-crash and store-reopen boundaries; bounded real-model pilot when a provider credential is reachable",
   "arms": {
     "existing": {
       "arm": "existing",
@@ -11,75 +11,69 @@
         "outcomes": [
           {
             "seq": 1,
-            "epoch": 1791154126,
+            "epoch": 1791158653,
             "task": "T1",
             "wake": "",
             "verdict": "routine",
             "summary": "disposition=ready_for_review; parser cleanup",
             "silent": false,
             "statusEndpoint": 0,
-            "statusIdent": "-",
-            "operationKey": "existing:T1"
+            "statusIdent": "-"
           },
           {
             "seq": 2,
-            "epoch": 1791154126,
+            "epoch": 1791158653,
             "task": "T2",
             "wake": "",
             "verdict": "routine",
             "summary": "disposition=surface_failure; retry handling",
             "silent": false,
             "statusEndpoint": 0,
-            "statusIdent": "-",
-            "operationKey": "existing:T2"
+            "statusIdent": "-"
           },
           {
             "seq": 3,
-            "epoch": 1791154126,
+            "epoch": 1791158653,
             "task": "T3",
             "wake": "",
             "verdict": "routine",
             "summary": "disposition=working; slow test run",
             "silent": false,
             "statusEndpoint": 0,
-            "statusIdent": "-",
-            "operationKey": "existing:T3"
+            "statusIdent": "-"
           },
           {
             "seq": 4,
-            "epoch": 1791154127,
+            "epoch": 1791158653,
             "task": "T4",
             "wake": "",
             "verdict": "captain",
             "summary": "disposition=escalate_decision; expired credentials",
             "silent": false,
             "statusEndpoint": 0,
-            "statusIdent": "-",
-            "operationKey": "existing:T4"
+            "statusIdent": "-"
           },
           {
             "seq": 5,
-            "epoch": 1791154127,
+            "epoch": 1791158653,
             "task": "T5",
             "wake": "",
             "verdict": "routine",
             "summary": "disposition=recover_or_escalate; interrupted analysis",
             "silent": false,
             "statusEndpoint": 0,
-            "statusIdent": "-",
-            "operationKey": "existing:T5"
+            "statusIdent": "-"
           },
           {
             "seq": 6,
-            "epoch": 1791154127,
+            "epoch": 1791158653,
             "task": "T6",
             "wake": "",
             "verdict": "routine",
             "summary": "disposition=preserve_state; duplicate reports",
             "silent": false,
             "statusEndpoint": 0,
-            "statusIdent": "-",
-            "operationKey": "existing:T6"
+            "statusIdent": "-"
           }
         ],
         "operations": [
@@ -93,31 +87,31 @@
             "operationId": "existing:T2",
             "task": "T2",
             "state": "settled",
-            "receiptSeq": 1
+            "receiptSeq": 2
           },
           {
             "operationId": "existing:T3",
             "task": "T3",
             "state": "settled",
-            "receiptSeq": 1
+            "receiptSeq": 3
           },
           {
             "operationId": "existing:T4",
             "task": "T4",
             "state": "settled",
-            "receiptSeq": 1
+            "receiptSeq": 4
           },
           {
             "operationId": "existing:T5",
             "task": "T5",
             "state": "settled",
-            "receiptSeq": 1
+            "receiptSeq": 5
           },
           {
             "operationId": "existing:T6",
             "task": "T6",
             "state": "settled",
-            "receiptSeq": 1
+            "receiptSeq": 6
           }
         ],
         "effects": [
@@ -125,37 +119,37 @@
             "effect": "outcome:T1",
             "operationId": "T1",
             "owner": "branch",
-            "at": 1791154126884
+            "at": 1791158653378
           },
           {
             "effect": "outcome:T2",
             "operationId": "T2",
             "owner": "branch",
-            "at": 1791154126942
+            "at": 1791158653432
           },
           {
             "effect": "outcome:T3",
             "operationId": "T3",
             "owner": "branch",
-            "at": 1791154127001
+            "at": 1791158653490
           },
           {
             "effect": "outcome:T4",
             "operationId": "T4",
             "owner": "branch",
-            "at": 1791154127060
+            "at": 1791158653547
           },
           {
             "effect": "outcome:T5",
             "operationId": "T5",
             "owner": "branch",
-            "at": 1791154127119
+            "at": 1791158653604
           },
           {
             "effect": "outcome:T6",
             "operationId": "T6",
             "owner": "branch",
-            "at": 1791154127177
+            "at": 1791158653662
           }
         ],
         "acknowledgements": [],
@@ -188,7 +182,7 @@
         "outcomes": [
           {
             "seq": 1,
-            "epoch": 1791154127,
+            "epoch": 1791158653,
             "task": "T1",
             "wake": "",
             "verdict": "routine",
@@ -196,11 +190,11 @@
             "silent": false,
             "statusEndpoint": 0,
             "statusIdent": "-",
-            "operationKey": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable:supervision:T1:1"
+            "operationKey": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable:supervision:T1:1"
           },
           {
             "seq": 2,
-            "epoch": 1791154127,
+            "epoch": 1791158653,
             "task": "T2",
             "wake": "",
             "verdict": "routine",
@@ -208,11 +202,11 @@
             "silent": false,
             "statusEndpoint": 0,
             "statusIdent": "-",
-            "operationKey": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable:supervision:T2:1"
+            "operationKey": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable:supervision:T2:1"
           },
           {
             "seq": 3,
-            "epoch": 1791154127,
+            "epoch": 1791158654,
             "task": "T3",
             "wake": "",
             "verdict": "routine",
@@ -220,11 +214,11 @@
             "silent": false,
             "statusEndpoint": 0,
             "statusIdent": "-",
-            "operationKey": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable:supervision:T3:1"
+            "operationKey": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable:supervision:T3:1"
           },
           {
             "seq": 4,
-            "epoch": 1791154127,
+            "epoch": 1791158654,
             "task": "T4",
             "wake": "",
             "verdict": "captain",
@@ -232,11 +226,11 @@
             "silent": false,
             "statusEndpoint": 0,
             "statusIdent": "-",
-            "operationKey": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable:supervision:T4:1"
+            "operationKey": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable:supervision:T4:1"
           },
           {
             "seq": 5,
-            "epoch": 1791154127,
+            "epoch": 1791158654,
             "task": "T5",
             "wake": "",
             "verdict": "routine",
@@ -244,11 +238,11 @@
             "silent": false,
             "statusEndpoint": 0,
             "statusIdent": "-",
-            "operationKey": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable:supervision:T5:1"
+            "operationKey": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable:supervision:T5:1"
           },
           {
             "seq": 6,
-            "epoch": 1791154127,
+            "epoch": 1791158654,
             "task": "T6",
             "wake": "",
             "verdict": "routine",
@@ -256,42 +250,42 @@
             "silent": false,
             "statusEndpoint": 0,
             "statusIdent": "-",
-            "operationKey": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable:supervision:T6:1"
+            "operationKey": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable:supervision:T6:1"
           }
         ],
         "operations": [
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable:supervision:T1:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable:supervision:T1:1",
             "task": "T1",
             "state": "settled",
             "receiptSeq": 1
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable:supervision:T2:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable:supervision:T2:1",
             "task": "T2",
             "state": "settled",
             "receiptSeq": 2
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable:supervision:T3:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable:supervision:T3:1",
             "task": "T3",
             "state": "settled",
             "receiptSeq": 3
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable:supervision:T4:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable:supervision:T4:1",
             "task": "T4",
             "state": "settled",
             "receiptSeq": 4
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable:supervision:T5:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable:supervision:T5:1",
             "task": "T5",
             "state": "settled",
             "receiptSeq": 5
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable:supervision:T6:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable:supervision:T6:1",
             "task": "T6",
             "state": "settled",
             "receiptSeq": 6
@@ -302,37 +296,37 @@
             "effect": "outcome:T1",
             "operationId": "T1",
             "owner": "branch",
-            "at": 1791154127290
+            "at": 1791158653904
           },
           {
             "effect": "outcome:T2",
             "operationId": "T2",
             "owner": "branch",
-            "at": 1791154127357
+            "at": 1791158653967
           },
           {
             "effect": "outcome:T3",
             "operationId": "T3",
             "owner": "branch",
-            "at": 1791154127420
+            "at": 1791158654029
           },
           {
             "effect": "outcome:T4",
             "operationId": "T4",
             "owner": "branch",
-            "at": 1791154127484
+            "at": 1791158654090
           },
           {
             "effect": "outcome:T5",
             "operationId": "T5",
             "owner": "branch",
-            "at": 1791154127548
+            "at": 1791158654154
           },
           {
             "effect": "outcome:T6",
             "operationId": "T6",
             "owner": "branch",
-            "at": 1791154127612
+            "at": 1791158654215
           }
         ],
         "acknowledgements": [],
@@ -356,69 +350,79 @@
         "existing owner lost T3 mid-execution"
       ],
       "notes": [
-        "T3: lost (in-process execution interrupted)"
+        "T3: wake row left queued after the crash",
+        "T3: recovered on the restarted owner",
+        "T4: recovered on the restarted owner",
+        "T5: recovered on the restarted owner",
+        "T6: recovered on the restarted owner"
       ],
       "trace": {
         "outcomes": [
           {
             "seq": 1,
-            "epoch": 1791154127,
+            "epoch": 1791158654,
             "task": "T1",
             "wake": "",
             "verdict": "routine",
             "summary": "disposition=ready_for_review; parser cleanup",
             "silent": false,
             "statusEndpoint": 0,
-            "statusIdent": "-",
-            "operationKey": "existing:T1"
+            "statusIdent": "-"
           },
           {
             "seq": 2,
-            "epoch": 1791154127,
+            "epoch": 1791158654,
             "task": "T2",
             "wake": "",
             "verdict": "routine",
             "summary": "disposition=surface_failure; retry handling",
             "silent": false,
             "statusEndpoint": 0,
-            "statusIdent": "-",
-            "operationKey": "existing:T2"
+            "statusIdent": "-"
           },
           {
             "seq": 3,
-            "epoch": 1791154127,
+            "epoch": 1791158654,
+            "task": "T3",
+            "wake": "",
+            "verdict": "routine",
+            "summary": "disposition=working; slow test run",
+            "silent": false,
+            "statusEndpoint": 0,
+            "statusIdent": "-"
+          },
+          {
+            "seq": 4,
+            "epoch": 1791158654,
             "task": "T4",
             "wake": "",
             "verdict": "captain",
             "summary": "disposition=escalate_decision; expired credentials",
             "silent": false,
             "statusEndpoint": 0,
-            "statusIdent": "-",
-            "operationKey": "existing:T4"
+            "statusIdent": "-"
           },
           {
-            "seq": 4,
-            "epoch": 1791154127,
+            "seq": 5,
+            "epoch": 1791158654,
             "task": "T5",
             "wake": "",
             "verdict": "routine",
             "summary": "disposition=recover_or_escalate; interrupted analysis",
             "silent": false,
             "statusEndpoint": 0,
-            "statusIdent": "-",
-            "operationKey": "existing:T5"
+            "statusIdent": "-"
           },
           {
-            "seq": 5,
-            "epoch": 1791154127,
+            "seq": 6,
+            "epoch": 1791158654,
             "task": "T6",
             "wake": "",
             "verdict": "routine",
             "summary": "disposition=preserve_state; duplicate reports",
             "silent": false,
             "statusEndpoint": 0,
-            "statusIdent": "-",
-            "operationKey": "existing:T6"
+            "statusIdent": "-"
           }
         ],
         "operations": [
@@ -432,31 +436,31 @@
             "operationId": "existing:T2",
             "task": "T2",
             "state": "settled",
-            "receiptSeq": 1
+            "receiptSeq": 2
           },
           {
             "operationId": "existing:T3",
             "task": "T3",
-            "state": "lost",
-            "receiptSeq": null
+            "state": "settled",
+            "receiptSeq": 3
           },
           {
             "operationId": "existing:T4",
             "task": "T4",
             "state": "settled",
-            "receiptSeq": 1
+            "receiptSeq": 4
           },
           {
             "operationId": "existing:T5",
             "task": "T5",
             "state": "settled",
-            "receiptSeq": 1
+            "receiptSeq": 5
           },
           {
             "operationId": "existing:T6",
             "task": "T6",
             "state": "settled",
-            "receiptSeq": 1
+            "receiptSeq": 6
           }
         ],
         "effects": [
@@ -464,31 +468,37 @@
             "effect": "outcome:T1",
             "operationId": "T1",
             "owner": "branch",
-            "at": 1791154127704
+            "at": 1791158654605
           },
           {
             "effect": "outcome:T2",
             "operationId": "T2",
             "owner": "branch",
-            "at": 1791154127762
+            "at": 1791158654660
+          },
+          {
+            "effect": "outcome:T3",
+            "operationId": "T3",
+            "owner": "branch",
+            "at": 1791158654816
           },
           {
             "effect": "outcome:T4",
             "operationId": "T4",
             "owner": "branch",
-            "at": 1791154127821
+            "at": 1791158654872
           },
           {
             "effect": "outcome:T5",
             "operationId": "T5",
             "owner": "branch",
-            "at": 1791154127881
+            "at": 1791158654928
           },
           {
             "effect": "outcome:T6",
             "operationId": "T6",
             "owner": "branch",
-            "at": 1791154127940
+            "at": 1791158654986
           }
         ],
         "acknowledgements": [],
@@ -523,7 +533,7 @@
         "outcomes": [
           {
             "seq": 1,
-            "epoch": 1791154128,
+            "epoch": 1791158655,
             "task": "T1",
             "wake": "",
             "verdict": "routine",
@@ -531,11 +541,11 @@
             "silent": false,
             "statusEndpoint": 0,
             "statusIdent": "-",
-            "operationKey": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable-fault:supervision:T1:1"
+            "operationKey": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable-fault:supervision:T1:1"
           },
           {
             "seq": 2,
-            "epoch": 1791154128,
+            "epoch": 1791158655,
             "task": "T2",
             "wake": "",
             "verdict": "routine",
@@ -543,11 +553,11 @@
             "silent": false,
             "statusEndpoint": 0,
             "statusIdent": "-",
-            "operationKey": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable-fault:supervision:T2:1"
+            "operationKey": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable-fault:supervision:T2:1"
           },
           {
             "seq": 3,
-            "epoch": 1791154128,
+            "epoch": 1791158655,
             "task": "T3",
             "wake": "",
             "verdict": "routine",
@@ -555,11 +565,11 @@
             "silent": false,
             "statusEndpoint": 0,
             "statusIdent": "-",
-            "operationKey": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable-fault:supervision:T3:1"
+            "operationKey": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable-fault:supervision:T3:1"
           },
           {
             "seq": 4,
-            "epoch": 1791154128,
+            "epoch": 1791158655,
             "task": "T4",
             "wake": "",
             "verdict": "captain",
@@ -567,11 +577,11 @@
             "silent": false,
             "statusEndpoint": 0,
             "statusIdent": "-",
-            "operationKey": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable-fault:supervision:T4:1"
+            "operationKey": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable-fault:supervision:T4:1"
           },
           {
             "seq": 5,
-            "epoch": 1791154128,
+            "epoch": 1791158655,
             "task": "T5",
             "wake": "",
             "verdict": "routine",
@@ -579,11 +589,11 @@
             "silent": false,
             "statusEndpoint": 0,
             "statusIdent": "-",
-            "operationKey": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable-fault:supervision:T5:1"
+            "operationKey": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable-fault:supervision:T5:1"
           },
           {
             "seq": 6,
-            "epoch": 1791154128,
+            "epoch": 1791158655,
             "task": "T6",
             "wake": "",
             "verdict": "routine",
@@ -591,42 +601,42 @@
             "silent": false,
             "statusEndpoint": 0,
             "statusIdent": "-",
-            "operationKey": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable-fault:supervision:T6:1"
+            "operationKey": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable-fault:supervision:T6:1"
           }
         ],
         "operations": [
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable-fault:supervision:T1:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable-fault:supervision:T1:1",
             "task": "T1",
             "state": "settled",
             "receiptSeq": 1
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable-fault:supervision:T2:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable-fault:supervision:T2:1",
             "task": "T2",
             "state": "settled",
             "receiptSeq": 2
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable-fault:supervision:T3:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable-fault:supervision:T3:1",
             "task": "T3",
             "state": "settled",
             "receiptSeq": 3
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable-fault:supervision:T4:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable-fault:supervision:T4:1",
             "task": "T4",
             "state": "settled",
             "receiptSeq": 4
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable-fault:supervision:T5:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable-fault:supervision:T5:1",
             "task": "T5",
             "state": "settled",
             "receiptSeq": 5
           },
           {
-            "operationId": "fm:/tmp/fm-pi-durable-eval-Cd5rKG/arm-durable-fault:supervision:T6:1",
+            "operationId": "fm:/tmp/fm-pi-durable-eval-W1YSZO/arm-durable-fault:supervision:T6:1",
             "task": "T6",
             "state": "settled",
             "receiptSeq": 6
@@ -637,37 +647,37 @@
             "effect": "outcome:T1",
             "operationId": "T1",
             "owner": "branch",
-            "at": 1791154128042
+            "at": 1791158655177
           },
           {
             "effect": "outcome:T2",
             "operationId": "T2",
             "owner": "branch",
-            "at": 1791154128106
+            "at": 1791158655238
           },
           {
             "effect": "outcome:T3",
             "operationId": "T3",
             "owner": "branch",
-            "at": 1791154128170
+            "at": 1791158655301
           },
           {
             "effect": "outcome:T4",
             "operationId": "T4",
             "owner": "branch",
-            "at": 1791154128232
+            "at": 1791158655362
           },
           {
             "effect": "outcome:T5",
             "operationId": "T5",
             "owner": "branch",
-            "at": 1791154128294
+            "at": 1791158655423
           },
           {
             "effect": "outcome:T6",
             "operationId": "T6",
             "owner": "branch",
-            "at": 1791154128357
+            "at": 1791158655487
           }
         ],
         "acknowledgements": [],
@@ -787,12 +797,12 @@
       ]
     },
     "existingWithFault": {
-      "passed": false,
+      "passed": true,
       "checks": [
         {
           "name": "every accepted task has an outcome",
-          "ok": false,
-          "detail": "missing outcomes: T3"
+          "ok": true,
+          "detail": "all tasks settled"
         },
         {
           "name": "no duplicate outcome per task",
@@ -821,8 +831,8 @@
         },
         {
           "name": "no lost accepted row",
-          "ok": false,
-          "detail": "lost rows: row-T3"
+          "ok": true,
+          "detail": "no lost rows"
         },
         {
           "name": "no false completion",
@@ -957,8 +967,8 @@
     {
       "id": "F09",
       "title": "after delivery, before acknowledgement",
-      "status": "not-covered",
-      "detail": "the existing routine-note delivery limitation is documented, not re-tested here"
+      "status": "pass",
+      "detail": "routineDelivery: append seq=1; a failed cursor write leaves the routine row unread and re-delivered (the documented routine-delivery limitation, tracked as fm-pi-routine-delivery-idempotency-followup-r1); a successful mark-read clears it (unreadAfterAck=0)"
     },
     {
       "id": "F10",
@@ -970,7 +980,7 @@
       "id": "F11",
       "title": "service crash with valid generation",
       "status": "pass",
-      "detail": "image=fm-pi-durable-lane:local docker=29.8.2 {\"generation\":1,\"killed\":true,\"nodeInContainer\":\"v22.23.3\",\"pid\":3508481}"
+      "detail": "image=fm-pi-durable-lane:local docker=29.8.2 {\"generation\":1,\"killed\":true,\"nodeInContainer\":\"v22.23.3\",\"pid\":4191296}"
     },
     {
       "id": "F12",
@@ -998,9 +1008,9 @@
     },
     {
       "id": "F16",
-      "title": "credential reachability (named failure not injected)",
-      "status": "known-gap",
-      "detail": "a real opencode-go credential was reachable and used for 6 model calls; the case never injects a missing credential or an incompatible dependency into the sidecar, so the named failure remains unexercised"
+      "title": "missing provider credential refused, no reroute",
+      "status": "pass",
+      "detail": "code=PROVIDER_UNAVAILABLE outcomes=0 fallbackCalls=0; the injected provider has no configured credential and the registered fallback provider was never invoked"
     },
     {
       "id": "F17",
@@ -1010,9 +1020,9 @@
     },
     {
       "id": "F18",
-      "title": "wrong-home request refused (store restore not exercised)",
-      "status": "known-gap",
-      "detail": "code=HOME_MISMATCH; the request carried a different homeId and no store was restored into another home, so the restore boundary remains unexercised"
+      "title": "restored store refused in another home",
+      "status": "pass",
+      "detail": "code=HOME_MISMATCH; the adapter store copied to a new home is refused because it records a different home identity"
     }
   ],
   "dockerLane": {
@@ -1030,7 +1040,7 @@
         "generation": 1,
         "killed": true,
         "nodeInContainer": "v22.23.3",
-        "pid": 3508481
+        "pid": 4191296
       }
     },
     "f17": {
@@ -1062,47 +1072,47 @@
       {
         "task": "T1",
         "verdict": "routine",
-        "summary": "disposition=ready_for_review; worker done tests pass awaiting review",
-        "text": "{\"task\":\"T1\",\"verdict\":\"routine\",\"summary\":\"disposition=ready_for_review; worker done tests pass awaiting review\"}",
-        "latencyMs": 1254
+        "summary": "disposition=ready_for_review; tests pass, awaiting review",
+        "text": "{\"task\":\"T1\",\"verdict\":\"routine\",\"summary\":\"disposition=ready_for_review; tests pass, awaiting review\"}",
+        "latencyMs": 1872
       },
       {
         "task": "T2",
-        "verdict": "routine",
-        "summary": "disposition=surface_failure; worker claims completion but CI has failing case",
-        "text": "{\"task\":\"T2\",\"verdict\":\"routine\",\"summary\":\"disposition=surface_failure; worker claims completion but CI has failing case\"}",
-        "latencyMs": 1412
+        "verdict": "captain",
+        "summary": "disposition=surface_failure; CI failing contradicts completion claim",
+        "text": "{\"task\":\"T2\",\"verdict\":\"captain\",\"summary\":\"disposition=surface_failure; CI failing contradicts completion claim\"}",
+        "latencyMs": 2283
       },
       {
         "task": "T3",
         "verdict": "routine",
-        "summary": "disposition=working; live worker and heartbeat show progress despite no text output",
-        "text": "{\"task\":\"T3\",\"verdict\":\"routine\",\"summary\":\"disposition=working; live worker and heartbeat show progress despite no text output\"}",
-        "latencyMs": 1299
+        "summary": "disposition=working; heartbeat shows progress despite quiet logs",
+        "text": "{\"task\":\"T3\",\"verdict\":\"routine\",\"summary\":\"disposition=working; heartbeat shows progress despite quiet logs\"}",
+        "latencyMs": 9410
       },
       {
         "task": "T4",
         "verdict": "captain",
-        "summary": "disposition=escalate_decision; expired credentials need captain-owned decision",
-        "text": "{\"task\":\"T4\",\"verdict\":\"captain\",\"summary\":\"disposition=escalate_decision; expired credentials need captain-owned decision\"}",
-        "latencyMs": 1155
+        "summary": "disposition=escalate_decision; expired credentials needs captain-owned decision",
+        "text": "{\"task\":\"T4\",\"verdict\":\"captain\",\"summary\":\"disposition=escalate_decision; expired credentials needs captain-owned decision\"}",
+        "latencyMs": 1512
       },
       {
         "task": "T5",
         "verdict": "routine",
         "summary": "disposition=surface_failure; worker exit with incomplete result",
         "text": "{\"task\":\"T5\",\"verdict\":\"routine\",\"summary\":\"disposition=surface_failure; worker exit with incomplete result\"}",
-        "latencyMs": 3803
+        "latencyMs": 6037
       },
       {
         "task": "T6",
         "verdict": "routine",
-        "summary": "disposition=preserve_state; duplicate and late older event handled idempotently",
-        "text": "{\"task\":\"T6\",\"verdict\":\"routine\",\"summary\":\"disposition=preserve_state; duplicate and late older event handled idempotently\"}",
-        "latencyMs": 1633
+        "summary": "disposition=preserve_state; duplicate and late older event ignored",
+        "text": "{\"task\":\"T6\",\"verdict\":\"routine\",\"summary\":\"disposition=preserve_state; duplicate and late older event ignored\"}",
+        "latencyMs": 25839
       }
     ],
-    "latencyMs": 10557,
+    "latencyMs": 46954,
     "matchingDispositions": 5,
     "grades": {
       "existing": true,
@@ -1115,110 +1125,110 @@
     "samples": [
       {
         "run": 1,
-        "existingMs": 374.8596600000001,
-        "durableMs": 407.9123550000004,
-        "existingWithFaultMs": 322.65038899999854,
-        "durableWithFaultMs": 420.3453789999985,
+        "existingMs": 830.1169700000028,
+        "durableMs": 411.13754999999946,
+        "existingWithFaultMs": 868.5256840000002,
+        "durableWithFaultMs": 409.9634470000019,
         "existingActions": 1,
         "durableActions": 1,
-        "duplicateOutcomes": -1
+        "duplicateOutcomes": 0
       },
       {
         "run": 2,
-        "existingMs": 382.8620840000003,
-        "durableMs": 413.6337390000008,
-        "existingWithFaultMs": 320.3432549999998,
-        "durableWithFaultMs": 417.3266569999978,
+        "existingMs": 813.9314159999994,
+        "durableMs": 436.3304780000035,
+        "existingWithFaultMs": 918.9317620000002,
+        "durableWithFaultMs": 416.01716000000306,
         "existingActions": 1,
         "durableActions": 1,
-        "duplicateOutcomes": -1
+        "duplicateOutcomes": 0
       },
       {
         "run": 3,
-        "existingMs": 379.23369699999967,
-        "durableMs": 412.118011999999,
-        "existingWithFaultMs": 326.7576479999989,
-        "durableWithFaultMs": 427.8058800000035,
+        "existingMs": 820.0720680000013,
+        "durableMs": 411.10177600000316,
+        "existingWithFaultMs": 871.0307639999955,
+        "durableWithFaultMs": 417.6145729999989,
         "existingActions": 1,
         "durableActions": 1,
-        "duplicateOutcomes": -1
+        "duplicateOutcomes": 0
       },
       {
         "run": 4,
-        "existingMs": 399.0606880000014,
-        "durableMs": 417.287261999998,
-        "existingWithFaultMs": 327.33392999999705,
-        "durableWithFaultMs": 428.51488099999915,
+        "existingMs": 832.7837910000017,
+        "durableMs": 404.22314400000323,
+        "existingWithFaultMs": 877.7194359999994,
+        "durableWithFaultMs": 405.0941199999943,
         "existingActions": 1,
         "durableActions": 1,
-        "duplicateOutcomes": -1
+        "duplicateOutcomes": 0
       },
       {
         "run": 5,
-        "existingMs": 396.7733939999998,
-        "durableMs": 421.52630099999806,
-        "existingWithFaultMs": 321.751188000002,
-        "durableWithFaultMs": 410.5662810000031,
+        "existingMs": 809.4394739999989,
+        "durableMs": 398.61041000000114,
+        "existingWithFaultMs": 860.9222910000026,
+        "durableWithFaultMs": 407.02971700001217,
         "existingActions": 1,
         "durableActions": 1,
-        "duplicateOutcomes": -1
+        "duplicateOutcomes": 0
       },
       {
         "run": 6,
-        "existingMs": 383.05774199999723,
-        "durableMs": 411.0423379999993,
-        "existingWithFaultMs": 319.73311699999977,
-        "durableWithFaultMs": 424.25425299999915,
+        "existingMs": 806.8426550000004,
+        "durableMs": 399.99235000000044,
+        "existingWithFaultMs": 871.2847990000009,
+        "durableWithFaultMs": 409.46551699998963,
         "existingActions": 1,
         "durableActions": 1,
-        "duplicateOutcomes": -1
+        "duplicateOutcomes": 0
       },
       {
         "run": 7,
-        "existingMs": 389.720784000001,
-        "durableMs": 420.6678949999987,
-        "existingWithFaultMs": 335.02362899999935,
-        "durableWithFaultMs": 429.5500809999976,
+        "existingMs": 808.7602749999933,
+        "durableMs": 400.8396519999951,
+        "existingWithFaultMs": 875.126575000002,
+        "durableWithFaultMs": 410.4439800000109,
         "existingActions": 1,
         "durableActions": 1,
-        "duplicateOutcomes": -1
+        "duplicateOutcomes": 0
       },
       {
         "run": 8,
-        "existingMs": 395.7994870000002,
-        "durableMs": 422.6319140000014,
-        "existingWithFaultMs": 327.9050019999995,
-        "durableWithFaultMs": 423.19028099999923,
+        "existingMs": 811.2112350000098,
+        "durableMs": 401.71640400000615,
+        "existingWithFaultMs": 877.3895249999914,
+        "durableWithFaultMs": 413.2555049999937,
         "existingActions": 1,
         "durableActions": 1,
-        "duplicateOutcomes": -1
+        "duplicateOutcomes": 0
       },
       {
         "run": 9,
-        "existingMs": 387.79421800000273,
-        "durableMs": 409.34969999999885,
-        "existingWithFaultMs": 318.6568170000028,
-        "durableWithFaultMs": 415.0848369999985,
+        "existingMs": 825.9782570000098,
+        "durableMs": 401.5493959999876,
+        "existingWithFaultMs": 875.4041069999948,
+        "durableWithFaultMs": 407.0660110000026,
         "existingActions": 1,
         "durableActions": 1,
-        "duplicateOutcomes": -1
+        "duplicateOutcomes": 0
       },
       {
         "run": 10,
-        "existingMs": 376.95086699999956,
-        "durableMs": 408.062546000001,
-        "existingWithFaultMs": 320.6160830000008,
-        "durableWithFaultMs": 412.2348009999987,
+        "existingMs": 809.6175999999978,
+        "durableMs": 401.6912929999962,
+        "existingWithFaultMs": 874.6163749999978,
+        "durableWithFaultMs": 408.5938779999997,
         "existingActions": 1,
         "durableActions": 1,
-        "duplicateOutcomes": -1
+        "duplicateOutcomes": 0
       }
     ],
     "medians": {
-      "existing": 385.42598,
-      "piDurable": 412.8758754999999,
-      "existingWithFault": 322.2007885000003,
-      "piDurableWithFault": 421.76782999999887
+      "existing": 812.5713255000046,
+      "piDurable": 401.7038485000012,
+      "existingWithFault": 874.8714749999999,
+      "piDurableWithFault": 409.71448199999577
     },
     "noiseFloorPercent": 1,
     "manualActions": {

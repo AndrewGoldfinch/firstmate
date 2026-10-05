@@ -171,6 +171,7 @@ export class DurableSidecar {
     let server: Server | null = null;
     try {
       store = new OperationStore(storePath);
+      store.claimHome(homeId);
       provider = new DurableProvider({
         storePath: runtimeStorePath,
         ...(options.configureModels ? { configureModels: options.configureModels } : {}),
@@ -592,6 +593,7 @@ export class DurableSidecar {
           `operation is ${existing.state}; a cancelled operation cannot settle a result`,
         );
       }
+      await this.requireModelAvailable(binding);
       // Accepted but unsettled: reconnect the original submission by its
       // requestId and settle exactly one outcome instead of refusing.
       await this.provider.resume();
@@ -610,6 +612,7 @@ export class DurableSidecar {
 
     const accepted = await this.withOwnershipLock(async () => {
       const binding = this.authorize(request);
+      await this.requireModelAvailable(binding);
       const at = this.now();
       const record: OperationRecord = {
         operationId: request.operationId,
@@ -661,6 +664,22 @@ export class DurableSidecar {
     const settled = await this.settleSettled(request, result);
     await this.barrier("dispatch.settle.after");
     return { record: settled, result, replayed: false };
+  }
+
+  /**
+   * Refuse execution when the supervisor's pinned provider has no usable
+   * credential here, so a missing or incompatible credential is an explicit
+   * unavailable state rather than a silent reroute to another executor.
+   */
+  private async requireModelAvailable(binding: SupervisorBinding): Promise<void> {
+    const agent = binding.agent as { model?: { provider?: unknown; modelId?: unknown } } | null;
+    const provider = agent?.model?.provider;
+    const modelId = agent?.model?.modelId;
+    if (typeof provider !== "string" || typeof modelId !== "string") return;
+    const availability = await this.provider.modelAvailability(provider, modelId);
+    if (!availability.available) {
+      throw new ProtocolError("PROVIDER_UNAVAILABLE", availability.reason);
+    }
   }
 
   /**

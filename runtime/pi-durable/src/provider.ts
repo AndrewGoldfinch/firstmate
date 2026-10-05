@@ -86,6 +86,8 @@ export class DurableProvider {
   private readonly configureModels?: (models: MutableModels) => void;
   private harness: Harness | null = null;
   private opening: Promise<Harness> | null = null;
+  /** The model collection registered for this owner, once the harness opens. */
+  private models: MutableModels | null = null;
   /** Cancel handles for the operations this process is executing. */
   private readonly running = new Map<string, (reason?: unknown) => void>();
 
@@ -101,6 +103,7 @@ export class DurableProvider {
         const storage = await openNodeSqliteStorage(this.storePath);
         const models = createModels();
         this.configureModels?.(models);
+        this.models = models;
         const harness = await Harness.open(
           storage,
           { models, registry: createRegistry() },
@@ -249,10 +252,45 @@ export class DurableProvider {
     harness.resume();
   }
 
+  /**
+   * Whether the named provider/model can actually execute here: the provider
+   * must be registered, hold a complete credential, and (when its catalog is
+   * known) list the model. A missing or incompatible credential is reported as
+   * unavailable so the caller refuses explicitly instead of rerouting to
+   * another executor.
+   */
+  async modelAvailability(
+    provider: string,
+    modelId: string,
+  ): Promise<{ available: true } | { available: false; reason: string }> {
+    await this.openHarness();
+    const models = this.models;
+    if (!models) return { available: false, reason: "model providers are not configured" };
+    if (!models.getProvider(provider)) {
+      return { available: false, reason: `provider ${JSON.stringify(provider)} is not registered` };
+    }
+    const auth = await models.checkAuth(provider);
+    if (!auth) {
+      return {
+        available: false,
+        reason: `provider ${JSON.stringify(provider)} has no configured credential`,
+      };
+    }
+    const catalog = models.getModels(provider);
+    if (catalog.length > 0 && !catalog.some((model) => model.id === modelId)) {
+      return {
+        available: false,
+        reason: `model ${JSON.stringify(modelId)} is not available for provider ${JSON.stringify(provider)}`,
+      };
+    }
+    return { available: true };
+  }
+
   async close(): Promise<void> {
     const harness = this.harness;
     this.harness = null;
     this.opening = null;
+    this.models = null;
     if (harness) {
       await harness.close(BACKGROUND_CONTEXT);
     }

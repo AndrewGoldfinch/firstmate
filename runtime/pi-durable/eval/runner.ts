@@ -8,8 +8,10 @@
  * outcomes.
  */
 
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 import { fauxAssistantMessage, fauxProvider, type MutableModels } from "@earendil-works/pi-ai";
 import { DurableSidecar } from "../src/service.ts";
 import { runDurableDispatch } from "../src/bridge.ts";
@@ -204,34 +206,125 @@ export type ExistingScenarioInput = {
   tasks: readonly FleetTask[];
   outcomeScript: string;
   respond?: Responder;
-  /** Task id whose in-process execution is interrupted before its outcome. */
+  /** Task whose in-process execution is interrupted before its outcome. */
   crashAtTask?: string;
 };
 
+const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
+const wakeLib = join(repoRoot, "bin", "fm-wake-lib.sh");
+const branchDispatch = join(repoRoot, "bin", "fm-branch-dispatch.mjs");
+
+/** Seed the real wake queue through the library's own append path. */
+function wakeAppend(home: string, rows: readonly (readonly [string, string])[]): void {
+  const script = `source "${wakeLib}"; while [ "$#" -ge 2 ]; do fm_wake_append signal "$1" "$2"; shift 2; done`;
+  const args = rows.flatMap(([task, payload]) => [`${task}.status`, payload]);
+  execFileSync("bash", ["-c", script, "wake", ...args], {
+    env: { ...process.env, FM_HOME: home },
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+}
+
+/** Claim the queued rows through the extension's own eligibility rules. */
+function wakeScope(home: string): { status: string; tasks: string[] } {
+  const out = execFileSync(process.execPath, [branchDispatch, "scope"], {
+    env: { ...process.env, FM_HOME: home },
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  const field = (name: string) =>
+    out
+      .split("\n")
+      .find((line) => line.startsWith(`${name}=`))
+      ?.slice(name.length + 1)
+      .trim() ?? "";
+  return { status: field("status"), tasks: field("tasks").split(/\s+/).filter(Boolean) };
+}
+
+/** Consume handled rows through the library's own queue-prune path. */
+function wakePrune(home: string, tasks: readonly string[]): void {
+  const script = `source "${wakeLib}"; state="$1"; shift; for task in "$@"; do fm_wake_queue_prune_task "$state" "$task"; done`;
+  execFileSync("bash", ["-c", script, "prune", join(home, "state"), ...tasks], {
+    env: { ...process.env, FM_HOME: home },
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+}
+
+/** Append one outcome exactly as the existing branch does: no operation key. */
+function appendOutcome(
+  scriptPath: string,
+  env: NodeJS.ProcessEnv,
+  task: FleetTask,
+  result: CandidateResult,
+): number {
+  const out = execFileSync(
+    "bash",
+    [scriptPath, "append", "--task", task.id, "--verdict", result.verdict, "--summary", result.summary],
+    { env, cwd: repoRoot, encoding: "utf8" },
+  );
+  const seq = Number.parseInt(out.trim(), 10);
+  if (!Number.isInteger(seq) || seq < 0) {
+    throw new Error(`fm-branch-outcome.sh append returned a non-numeric sequence: ${out.trim()}`);
+  }
+  return seq;
+}
+
 /**
- * Run one scenario through the reduced existing-path arm: the real outcome
- * store, no durable operation acceptance. A crash mid-task loses that task.
+ * Run one scenario through the real existing supervision path as faithfully as
+ * this environment allows: the real wake queue and eligibility rules
+ * (bin/fm-wake-lib.sh, bin/fm-branch-dispatch.mjs) and the real append-only
+ * outcome store (bin/fm-branch-outcome.sh). A crash mid-task leaves its wake
+ * row queued, so the restart re-claims and reruns it, exactly as the pinned
+ * extension's normal recovery does. What remains reduced: no interactive Pi
+ * AgentSession drives the branch, so the wake is answered by the deterministic
+ * responder instead of a Pi model turn.
  */
 export async function runExistingScenario(input: ExistingScenarioInput): Promise<ArmResult> {
-  mkdirSync(join(input.home, "state"), { recursive: true });
+  const stateDir = join(input.home, "state");
+  mkdirSync(stateDir, { recursive: true });
   const respond = input.respond ?? truthfulResponder();
   const env = { ...process.env, FM_HOME: input.home };
   const ledger = new EffectLedger();
   const faults: string[] = [];
   const notes: string[] = [];
-  const sink = createOutcomeSink({ scriptPath: input.outcomeScript, env });
   const operations: OperationRecordView[] = [];
 
-  for (const task of input.tasks) {
-    if (input.crashAtTask === task.id) {
-      faults.push(`existing owner lost ${task.id} mid-execution`);
-      notes.push(`${task.id}: lost (in-process execution interrupted)`);
-      operations.push({ operationId: `existing:${task.id}`, task: task.id, state: "lost", receiptSeq: null });
-      continue;
+  for (const task of input.tasks) writeFileSync(join(stateDir, `${task.id}.meta`), "project=fleet\n");
+  wakeAppend(
+    input.home,
+    input.tasks.map((task) => [task.id, task.planted] as const),
+  );
+
+  let crashArmed = input.crashAtTask !== undefined;
+  for (let round = 0; round < 2; round += 1) {
+    const scope = wakeScope(input.home);
+    if (scope.status !== "safe") break;
+    const toPrune: string[] = [];
+    let crashed = false;
+    for (const taskId of scope.tasks) {
+      const task = input.tasks.find((candidate) => candidate.id === taskId);
+      if (!task) continue;
+      if (crashArmed && taskId === input.crashAtTask) {
+        crashArmed = false;
+        crashed = true;
+        faults.push(`existing owner lost ${taskId} mid-execution`);
+        notes.push(`${taskId}: wake row left queued after the crash`);
+        break;
+      }
+      const seq = appendOutcome(input.outcomeScript, env, task, respond(task));
+      ledger.apply(`outcome:${task.id}`, task.id, "branch");
+      operations.push({
+        operationId: `existing:${task.id}`,
+        task: task.id,
+        state: "settled",
+        receiptSeq: seq,
+      });
+      if (round > 0) notes.push(`${task.id}: recovered on the restarted owner`);
+      toPrune.push(task.id);
     }
-    await sink.appendOrGet(`existing:${task.id}`, respond(task));
-    ledger.apply(`outcome:${task.id}`, task.id, "branch");
-    operations.push({ operationId: `existing:${task.id}`, task: task.id, state: "settled", receiptSeq: 1 });
+    if (toPrune.length > 0) wakePrune(input.home, toPrune);
+    if (!crashed) break;
   }
 
   const outcomes = await readOutcomeStore(input.outcomeScript, env);

@@ -111,6 +111,16 @@ function toBinding(row: SupervisorRow): SupervisorBinding {
   };
 }
 
+/** A store already bound to a different home was restored into this one. */
+export class HomeMismatchError extends Error {
+  readonly code = "HOME_MISMATCH";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "HomeMismatchError";
+  }
+}
+
 export class OperationStore {
   readonly path: string;
   private readonly db: DatabaseSync;
@@ -164,6 +174,10 @@ export class OperationStore {
         home_id TEXT PRIMARY KEY,
         cursor INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS store_meta (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        home_id TEXT NOT NULL
       );
     `);
     this.migrateSupervisors();
@@ -419,6 +433,27 @@ export class OperationStore {
         binding.createdAt,
         binding.updatedAt,
       );
+  }
+
+  /**
+   * Bind this store to its owning home on first open, or refuse when the store
+   * was restored from a different home. The adapter store is home-local, so a
+   * copy carried into another home must be refused rather than read under the
+   * new identity.
+   */
+  claimHome(homeId: string): void {
+    const row = this.db.prepare("SELECT home_id FROM store_meta WHERE id = 1").get() as
+      | { home_id: string }
+      | undefined;
+    if (!row) {
+      this.db.prepare("INSERT INTO store_meta (id, home_id) VALUES (1, ?)").run(homeId);
+      return;
+    }
+    if (row.home_id !== homeId) {
+      throw new HomeMismatchError(
+        `store belongs to home ${JSON.stringify(row.home_id)}, not ${JSON.stringify(homeId)}`,
+      );
+    }
   }
 
   close(): void {

@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { createModels } from "@earendil-works/pi-ai";
+import { createModels, createProvider } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -62,6 +62,35 @@ test("a fresh conversation does not inherit an unrelated root configuration", as
     const again = await provider.ensureConversation({ conversationId: created.conversationId, agent });
     assert.equal(again.conversationId, created.conversationId);
     assert.equal(again.created, false);
+  } finally {
+    await provider.close();
+  }
+});
+
+test("a provider with no configured credential is reported unavailable", async () => {
+  const home = tempHome();
+  const broken = createProvider({
+    id: "f16-missing-credential",
+    name: "F16 missing credential",
+    auth: { apiKey: { name: "F16 missing credential", resolve: async () => undefined } },
+    models: [{ id: "f16-missing-1", name: "F16 missing model" }],
+    api: {
+      stream: async () => {
+        throw new Error("the fallback executor must never run");
+      },
+      streamSimple: async () => {
+        throw new Error("the fallback executor must never run");
+      },
+    },
+  } as never);
+  const provider = new DurableProvider({
+    storePath: join(home, "runtime.sqlite"),
+    configureModels: (models) => models.setProvider(broken),
+  });
+  try {
+    const result = await provider.modelAvailability("f16-missing-credential", "f16-missing-1");
+    assert.equal(result.available, false);
+    assert.match(result.available ? "" : result.reason, /no configured credential/);
   } finally {
     await provider.close();
   }

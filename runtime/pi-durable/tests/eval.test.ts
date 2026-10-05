@@ -32,12 +32,14 @@ test("the deterministic harness grades both arms and rejects every corrupted tra
   assert.equal(results.grades.existing.passed, true, "arm A must pass the fleet without a fault");
   assert.equal(results.grades["pi-durable"].passed, true, "arm B must pass the fleet without a fault");
 
-  // A fault distinguishes the arms: A silently loses the task, B keeps it
-  // unresolved rather than lost.
-  assert.equal(results.grades.existingWithFault.passed, false);
+  // Both arms complete the required recovery: the existing path re-presents
+  // the interrupted wake and the durable path reattaches its accepted
+  // operation, so no accepted task is lost.
+  assert.equal(results.grades.existingWithFault.passed, true, "arm A must recover the interrupted task");
+  assert.equal(results.grades["pi-durableWithFault"].passed, true, "arm B must recover the interrupted task");
   assert.equal(
     results.grades.existingWithFault.checks.find((check) => check.name === "no lost accepted row")?.ok,
-    false,
+    true,
   );
   assert.equal(
     results.grades["pi-durableWithFault"].checks.find((check) => check.name === "no lost accepted row")?.ok,

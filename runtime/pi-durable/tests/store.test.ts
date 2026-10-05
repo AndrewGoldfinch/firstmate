@@ -81,3 +81,21 @@ test("observation pruning drops transient observations before settlements", () =
   );
   store.close();
 });
+
+test("a store claimed by one home refuses a different home", () => {
+  const path = join(tempHome(), "operations.sqlite");
+  const store = new OperationStore(path);
+  store.claimHome("/home/a");
+  assert.doesNotThrow(() => store.claimHome("/home/a"));
+  assert.throws(
+    () => store.claimHome("/home/b"),
+    (error: unknown) => (error as { code?: string }).code === "HOME_MISMATCH",
+  );
+  store.close();
+
+  // The identity survives a reopen: a restored copy still refuses its new home.
+  const reopened = new OperationStore(path);
+  assert.doesNotThrow(() => reopened.claimHome("/home/a"));
+  assert.throws(() => reopened.claimHome("/home/b"));
+  reopened.close();
+});

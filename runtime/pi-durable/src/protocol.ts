@@ -124,6 +124,7 @@ export type ErrorCode =
   | "AUTHORITY_SCOPE"
   | "SCOPE_UNSUPPORTED"
   | "OPERATION_CANCELLED"
+  | "PROVIDER_UNAVAILABLE"
   | "INTERNAL";
 
 /** A refusal that maps to a protocol error code. */
