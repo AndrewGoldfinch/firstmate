@@ -437,6 +437,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/12-delivery-verification-2.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },

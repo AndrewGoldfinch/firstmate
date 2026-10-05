@@ -11,16 +11,18 @@ Two layers, named apart from now on:
 | --- | --- |
 | Prototype 0 — Durable Outcome persistence | **Complete.** Claim proven; frozen; no further work on append dedup. |
 | Spike 1 — make real-path F09 reproducible | **Complete.** See [`development.md`](development.md) "Spike 1 — real-path F09 reproduction"; the real Pi reconcile path reproduces F09 headlessly (`tests/fm-pi-branch-extension.test.sh`). |
-| Prototype 1 — Durable Delivery boundary | **Implemented, HOLD - IMPLEMENTATION.** Durable delivery identity landed (`3d8cf6c4`), but independent verification (`11-delivery-verification.md`) found the streaming defect below; fix in progress. |
-| Phase 1 adoption | Gated on adversarial real-path F09 elimination. |
+| Prototype 1 — Durable Delivery boundary | **Verified (ADVANCE), pending Phase 1 call.** Durable delivery identity landed (`3d8cf6c4`); independent verification found a streaming defect (`11-delivery-verification.md`), fixed by persisting the record synchronously before the cursor advances (`44714b57`), and re-verified ADVANCE (`12-delivery-verification-2.md`) with one residual below. |
+| Phase 1 adoption | Gate met under normal persistence; captain call held (`pi-durable-phase1-approval`) with the residual hardening tracked. |
 
-## Prototype 1 — Durable Delivery boundary (implemented; under fix)
+## Prototype 1 — Durable Delivery boundary (verified)
 
 Durable delivery identity for routine notes is opt-in (`FM_PI_DURABLE_DELIVERY`): a routine note stores its own delivery record keyed by store `seq`, so a reload finds it and delivers nothing again; a sequence match with different content fails closed; the default path is unchanged.
 
 **HOLD - IMPLEMENTATION (streaming).** Independent verification (`11-delivery-verification.md`) found that on the real Pi path a reconcile during main's streaming turn uses `pi.sendMessage(..., { deliverAs: "nextTurn" })`, which queues the message in memory until the next prompt flush. The session entry is therefore not yet persisted, `ensureRoutineOutcome` cannot see it, re-delivers, and then advances `mark-read` — duplicating the note and, on a crash after the ack, losing it. The shipped fixture persisted synchronously so it could not observe this.
 
-Fix in progress: make the routine delivery record durable **before** the cursor advances (synchronous append keyed by `seq`, or refuse to advance `mark-read` while the delivery is only queued), and extend the fixture to model `nextTurn` deferral and re-run F09 with `mainStreaming` true.
+**Fix:** the routine delivery record is now a synchronous `appendEntry` (mirroring the captain visible-outcome path), persisted before `mark-read` can cross it, with its own entry renderer (`44714b57`). Independent re-verification (`12-delivery-verification-2.md`) returns **ADVANCE**: with normal persistence the F09 window delivers exactly once with no duplicate and no loss, the deferred queue is unused, the default path is unchanged, and conflicts fail closed.
+
+**Residual (tracked, inherited):** `ensureRoutineOutcome` verifies persistence via in-memory `getEntries()`, not the session file, so a storage write failure or a fresh-session no-conversation window can still lose a note while the store says read; the same structure exists in the captain path. Hardening is filed as `pi-durable-durable-verify-hardening`; Phase 1 promotion is a captain call (`pi-durable-phase1-approval`).
 
 ## Prototype 0 — Durable Outcome persistence (complete)
 
