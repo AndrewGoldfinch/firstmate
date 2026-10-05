@@ -76,7 +76,7 @@
 // its deliberate limits.
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 // Pi exposes pi-ai to extensions as a first-class module in both its Node
@@ -1057,10 +1057,20 @@ export default function (pi: ExtensionAPI) {
   }
 
   // Remove exactly the record this owner appended after it lost the delivery
-  // fence, so the home keeps one durable copy. The record is identified by its
-  // own deliveryId, never by sequence, so a sibling owner's copy survives.
-  function rollbackDeliveryEntry(file: string | undefined, customType: string, deliveryId: string): void {
+  // fence, but only while a durable delivery for the same store sequence
+  // survives without it. An adopted record has no sibling copy, so deleting it
+  // would lose the only committed delivery; a home-wide marker that names a
+  // different record, or a different record still in the session file, is the
+  // proof that a sibling exists.
+  function rollbackDeliveryEntry(seq: number, file: string | undefined, customType: string, deliveryId: string): void {
     if (!file) return;
+    const committedId = readCommittedDeliveryId(seq);
+    // Our own record is the committed delivery (possibly adopted by a
+    // replacement), so the stale owner must leave it in place.
+    if (committedId === deliveryId) return;
+    // No marker names a winner: only remove ours when a sibling for the same
+    // sequence is still recorded, otherwise ours is the only durable copy.
+    if (committedId === null && !hasSiblingDelivery(file, customType, seq, deliveryId)) return;
     let text: string;
     try {
       text = readFileSync(file, "utf8");
@@ -1091,18 +1101,56 @@ export default function (pi: ExtensionAPI) {
       // A committed home-wide marker still makes the delivery exactly once for
       // later readers; a failed rollback leaves only a stray line.
     }
+    // Roll the removed record out of Pi's in-memory model too, so the stale
+    // owner keeps no phantom copy that the next reconciliation could mistake
+    // for a delivery.
+    if (currentMainSession) unpoisonSessionEntry(currentMainSession, customType, deliveryId);
+  }
+
+  // A different durable record for the same store sequence: the proof that
+  // removing this owner's record cannot lose the home's delivery.
+  function hasSiblingDelivery(file: string, customType: string, seq: number, deliveryId: string): boolean {
+    let text: string;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch {
+      return false;
+    }
+    for (const line of text.split("\n")) {
+      if (!line) continue;
+      try {
+        const entry = JSON.parse(line) as { type?: string; customType?: string; data?: { seq?: unknown; deliveryId?: unknown } };
+        if (entry.type === "custom" && entry.customType === customType
+          && entry.data !== null && typeof entry.data === "object"
+          && entry.data.seq === seq && entry.data.deliveryId !== deliveryId) return true;
+      } catch {
+        // A line we cannot parse is not a sibling record.
+      }
+    }
+    return false;
   }
 
   const deliveredMarkerPath = (seq: number): string => join(deliveredMarkerDir, String(seq));
+  // Presence is the exactly-once proof, sound because no rollback ever removes
+  // a record the marker has committed. The marker also names the winning
+  // deliveryId so a stale owner can tell its own committed record from a
+  // sibling's.
   const deliveryCommitted = (seq: number): boolean => existsSync(deliveredMarkerPath(seq));
+  const readCommittedDeliveryId = (seq: number): string | null => {
+    try {
+      return readFileSync(deliveredMarkerPath(seq), "utf8").trim() || null;
+    } catch {
+      return null;
+    }
+  };
 
   // The atomic home-wide claim for one routine sequence. O_EXCL is the fence:
   // exactly one owner in the home creates it, and a replacement destination
   // consults it instead of delivering the same logical note a second time.
-  function commitDelivery(seq: number): boolean {
+  function commitDelivery(seq: number, deliveryId: string | null): boolean {
     try {
       mkdirSync(deliveredMarkerDir, { recursive: true });
-      writeFileSync(deliveredMarkerPath(seq), "", { flag: "wx", mode: 0o600 });
+      writeFileSync(deliveredMarkerPath(seq), deliveryId ?? "", { flag: "wx", mode: 0o600 });
       return true;
     } catch {
       return false;
@@ -1117,6 +1165,27 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  // Crash-recovery bound on the delivery ledger: a marker whose row is already
+  // read (not in the current unread set) has done its job and is reclaimed, so
+  // a crash between mark-read and the marker removal cannot leak indefinitely.
+  function reclaimReadDeliveryMarkers(unreadSeqs: ReadonlySet<number>): void {
+    let names: string[];
+    try {
+      names = readdirSync(deliveredMarkerDir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const seq = Number(name);
+      if (!Number.isInteger(seq) || unreadSeqs.has(seq)) continue;
+      try {
+        rmSync(deliveredMarkerPath(seq), { force: true });
+      } catch {
+        // Best effort; a leftover marker only suppresses a re-delivery.
+      }
+    }
+  }
+
   // Append one sequence-keyed delivery record and prove it durable before its
   // caller may advance the read cursor. Returns the deliveryId of a record this
   // call appended, null when a durable match already existed, or ok:false when
@@ -1127,21 +1196,28 @@ export default function (pi: ExtensionAPI) {
     customType: string,
     parseRecord: (value: unknown) => OutcomeRow | null,
     expectedGeneration: number,
-  ): { ok: true; deliveryId: string | null } | { ok: false } {
+  ): { ok: true; deliveryId: string | null; appended: boolean } | { ok: false } {
     if (!currentMainSession) return { ok: false };
-    let matching = false;
+    let matchedId: string | null = null;
+    let matched = false;
     for (const entry of currentMainSession.getEntries()) {
       if (entry.type !== "custom" || entry.customType !== customType) continue;
       const recorded = parseRecord(entry.data);
       if (!recorded || recorded.seq !== row.seq) continue;
       if (!sameOutcome(recorded, row)) return { ok: false };
-      matching = true;
+      matched = true;
+      const candidate = (entry.data as { deliveryId?: unknown }).deliveryId;
+      if (typeof candidate === "string") matchedId = candidate;
     }
-    if (matching) {
+    if (matched) {
       // A matching record is durable only once Pi has flushed the session;
       // until then it is deferred, never re-appended, so the phantom cannot
-      // accumulate while the session has no conversation.
-      return sessionFlushed(currentMainSession) ? { ok: true, deliveryId: null } : { ok: false };
+      // accumulate while the session has no conversation. A replacement that
+      // adopts this record adopts its deliveryId too, so the rollback guard can
+      // recognize the committed delivery as already recorded.
+      return sessionFlushed(currentMainSession)
+        ? { ok: true, deliveryId: matchedId, appended: false }
+        : { ok: false };
     }
     const deliveryId = randomUUID();
     try {
@@ -1152,10 +1228,10 @@ export default function (pi: ExtensionAPI) {
     }
     if (!sessionFlushed(currentMainSession)) return { ok: false };
     if (!generationOwnsLockSync(expectedGeneration)) {
-      rollbackDeliveryEntry(currentMainSession.getSessionFile(), customType, deliveryId);
+      rollbackDeliveryEntry(row.seq, currentMainSession.getSessionFile(), customType, deliveryId);
       return { ok: false };
     }
-    return { ok: true, deliveryId };
+    return { ok: true, deliveryId, appended: true };
   }
 
   // A captain outcome is delivered by a durable, rendered session entry, not
@@ -1197,9 +1273,10 @@ export default function (pi: ExtensionAPI) {
     // Claim the home-wide identity for a durable delivery, whether this call
     // appended it or recognized an already-durable match. A lost claim means
     // another owner committed first; only our own just-appended record is
-    // rolled back, so the home keeps exactly one copy.
-    if (!commitDelivery(row.seq) && delivered.deliveryId !== null) {
-      rollbackDeliveryEntry(currentMainSession.getSessionFile(), VISIBLE_ROUTINE_ENTRY_TYPE, delivered.deliveryId);
+    // rolled back, and only while a sibling copy survives, so the home keeps
+    // exactly one copy.
+    if (!commitDelivery(row.seq, delivered.deliveryId) && delivered.appended && delivered.deliveryId) {
+      rollbackDeliveryEntry(row.seq, currentMainSession.getSessionFile(), VISIBLE_ROUTINE_ENTRY_TYPE, delivered.deliveryId);
       return false;
     }
     return true;
@@ -1337,16 +1414,25 @@ export default function (pi: ExtensionAPI) {
     }
     const unread = await runOutcomeScript(["unread"]);
     if (!unread.ok) return false;
-    if (unread.stdout) {
+    const unreadRows: OutcomeRow[] = [];
+    for (const line of unread.stdout ? unread.stdout.split("\n") : []) {
+      let row: OutcomeRow | null = null;
+      try {
+        row = parseOutcomeRow(JSON.parse(line));
+      } catch {
+        row = null;
+      }
+      if (!row) return false;
+      unreadRows.push(row);
+    }
+    // A crash between a successful mark-read and the marker removal leaks a
+    // marker; reclaim any marker whose row is no longer unread so the ledger
+    // stays bounded to rows still awaiting a cursor advance. This runs even
+    // when nothing is unread, which is exactly the leaked-marker case.
+    if (durableDeliveryEnabled) reclaimReadDeliveryMarkers(new Set(unreadRows.map((candidate) => candidate.seq)));
+    if (unreadRows.length > 0) {
       if (!currentMainSession) return false;
-      for (const line of unread.stdout.split("\n")) {
-        let row: OutcomeRow | null = null;
-        try {
-          row = parseOutcomeRow(JSON.parse(line));
-        } catch {
-          row = null;
-        }
-        if (!row) return false;
+      for (const row of unreadRows) {
         // The last cancellation point of this row: everything from here to
         // its mark-read is synchronous delivery plus the awaited script that
         // records it, with no second ownership test in between. That is

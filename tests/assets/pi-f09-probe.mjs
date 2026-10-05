@@ -28,16 +28,23 @@ async function worker() {
   // Only this disposable destination is intercepted, at the filesystem write
   // after the extension's ownership check. All actual writes use the real SDK.
   let pauseBeforeWrite = false;
+  let pauseAfterWrite = false;
   const ioErrors = [];
   const append = fs.appendFileSync;
   fs.appendFileSync = function (path, data, ...args) {
-    if (pauseBeforeWrite && path === sessionFile && String(data).includes(TYPE)) {
+    const note = (pauseBeforeWrite || pauseAfterWrite) && path === sessionFile && String(data).includes(TYPE);
+    let stopAfterWrite = false;
+    if (note) {
+      stopAfterWrite = pauseAfterWrite;
+      fs.writeFileSync(join(home, stopAfterWrite ? "after-write" : "before-write"), String(process.pid));
       pauseBeforeWrite = false;
-      fs.writeFileSync(join(home, "before-write"), String(process.pid));
-      process.kill(process.pid, "SIGSTOP");
+      pauseAfterWrite = false;
+      if (!stopAfterWrite) process.kill(process.pid, "SIGSTOP");
     }
     try {
-      return append(path, data, ...args);
+      const result = append(path, data, ...args);
+      if (stopAfterWrite) process.kill(process.pid, "SIGSTOP");
+      return result;
     } catch (error) {
       if (path === sessionFile) ioErrors.push(error.code);
       throw error;
@@ -84,6 +91,7 @@ async function worker() {
       else if (command === "retry") await session.extensionRunner.emit({ type: "turn_end", turnIndex: 0,
         message: { role: "assistant", content: [] }, toolResults: [] });
       else if (command === "pause-before-write") pauseBeforeWrite = true;
+      else if (command === "pause-after-write") pauseAfterWrite = true;
       else if (command === "converse") manager.appendMessage({ role: "user", content: "Local fixture conversation", timestamp: Date.now() });
       else assert.equal(command, "snapshot");
       process.send({ id, snapshot: snapshot() });
@@ -351,10 +359,66 @@ exec "$FM_F09_BASH" "$@"
       await kill(first);
       await kill(second);
     }
+    {
+      const home = setup("takeover-after-append-before-commit");
+      const first = await launch(home);
+      grant(home, first);
+      await first.request("pause-after-write");
+      const blocked = first.request("start");
+      blocked.catch(() => {});
+      // Wait for the real SIGSTOP after the durable append: the record is on
+      // disk, but the home-wide marker is not yet committed.
+      let appended = false;
+      for (let i = 0; i < 300; i++) {
+        const status = execFileSync("ps", ["-o", "stat=", "-p", String(first.child.pid)], { encoding: "utf8" });
+        if (fs.existsSync(join(home, "after-write")) && status.trim().startsWith("T")) { appended = true; break; }
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      assert.ok(appended, "stale owner must stop after appending its durable record");
+      const files = fs.readdirSync(join(home, "sessions")).filter((file) => file.endsWith(".jsonl"));
+      assert.equal(files.flatMap((file) => readJsonl(join(home, "sessions", file))).filter(isNote).length, 1,
+        "the stale owner's append is durable before the commit");
+      // The replacement opens the session file after that append, so it adopts
+      // the existing record instead of writing a second copy.
+      const second = await launch(home);
+      grant(home, second);
+      const replacement = observe(home, "replacement-adopts-appended-record", await second.request("start"));
+      assert.equal(replacement.diskRecords, 1);
+      assert.equal(replacement.unread, 0);
+      assert.equal(replacement.deliveryMarkers, 0);
+      first.child.kill("SIGCONT");
+      const stale = observe(home, "stale-owner-resumes-after-adoption", await blocked);
+      assert.notEqual(stale.pid, stale.lockPid);
+      // There is no sibling copy, so the stale owner must leave the adopted
+      // delivery in place: one committed note, one home-wide delivery.
+      assert.equal(stale.diskRecords, 1, "the adopted delivery must survive the stale owner's rollback");
+      assert.equal(stale.unread, 0);
+      assert.equal(stale.deliveryMarkers, 0);
+      await kill(first);
+      await kill(second);
+    }
+    {
+      const home = setup("leaked-marker-reclaim");
+      const first = await launch(home);
+      grant(home, first);
+      await first.request("start");
+      await kill(first);
+      // Simulate a crash between a successful mark-read and the marker removal:
+      // the row is read, but its home-wide marker was left behind.
+      fs.mkdirSync(join(home, "state/.branch-outcomes-delivered"), { recursive: true });
+      fs.writeFileSync(join(home, "state/.branch-outcomes-delivered/1"), "");
+      const second = await launch(home);
+      grant(home, second);
+      const reclaimed = observe(home, "leaked-marker-reclaimed", await second.request("start"));
+      assert.equal(reclaimed.unread, 0);
+      assert.equal(reclaimed.diskRecords, 1);
+      assert.equal(reclaimed.deliveryMarkers, 0, "a marker leaked after a successful read is reclaimed");
+      await kill(second);
+    }
     report.verdict = "PASS";
     save();
     for (const row of observations.filter((row) => row.scenario)) console.log(JSON.stringify(row));
-    console.log("F09_PROBE_COMPLETE verdict=PASS; one committed note is one home-wide delivery across restart, destination replacement, and stale-owner takeover");
+    console.log("F09_PROBE_COMPLETE verdict=PASS; one committed note is one home-wide delivery across restart, destination replacement, stale-owner takeover, and adoption before commit");
   } catch (error) {
     report.verdict = "PROBE_FAILED";
     report.error = error.stack;
