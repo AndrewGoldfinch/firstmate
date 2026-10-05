@@ -11,17 +11,14 @@ Two layers, named apart from now on:
 | --- | --- |
 | Prototype 0 — Durable Outcome persistence | **Complete.** Claim proven; frozen; no further work on append dedup. |
 | Spike 1 — make real-path F09 reproducible | **Complete.** See [`development.md`](development.md) "Spike 1 — real-path F09 reproduction"; the real Pi reconcile path reproduces F09 headlessly (`tests/fm-pi-branch-extension.test.sh`). |
-| Prototype 1 — Durable Delivery boundary | **HOLD - IMPLEMENTATION (targeted hardening).** The reservation-recovery loss is fixed, but a source review found the ADVANCE claims exceed the evidence: the takeover test does not forbid a stale append, reclaim is a read-compare-write (not atomic CAS), and a crash inside a marker write can leave an empty marker that strands a note. |
-| Phase 1 adoption | **Held.** Gate not met: the milestone's full live-model/terminal/lock-acquisition/host-reboot fidelity is not established, and the three hardening checks above are pending. |
+| Prototype 1 — Durable Delivery boundary | **Resolved at an explicit option-2 contract (verified ADVANCE).** No loss and no duplicate via the marker (`O_EXCL` creation, no destructive cleanup); the original "superseded owner cannot deliver" invariant is **not** met and reclaim's compare-to-rename window is bounded, not eliminated; see [`24-delivery-serialization.md`](24-delivery-serialization.md) / [`25-serialization-verify.md`](25-serialization-verify.md). |
+| Phase 1 adoption | **Captain contract decision.** Promotion requires accepting the option-2 contract; held as `pi-durable-phase1-contract` (and `pi-durable-phase1-promotion`). The milestone's full live-model/terminal/lock-acquisition/host-reboot fidelity remains unestablished. |
 
-## Prototype 1 — Durable Delivery boundary (HOLD, targeted hardening)
+## Prototype 1 — Durable Delivery boundary (resolved at an option-2 contract)
 
 Durable delivery identity for routine notes is opt-in (`FM_PI_DURABLE_DELIVERY`): a routine note stores its own delivery record keyed by store `seq`, so a reload finds it and delivers nothing again; a sequence match with different content fails closed; the default path is unchanged.
 
-**Status: HOLD - IMPLEMENTATION.** Five fix/verify iterations closed real defects, and the reservation-recovery loss is fixed (pre-fix falsification `0 !== 1`; `21-reservation-verify.md` returns ADVANCE on the tested schedules). A subsequent source review found the ADVANCE claims exceed that evidence, and the targeted hardening checks are now required before promotion:
-- **stale-owner append:** the takeover test asserts ownership changed, not that a stale owner is forbidden to append — make the assertion enforce the original invariant, and fix the code if a stale append is possible;
-- **reclaim atomicity:** `reclaimReservation` reads, compares, then separately overwrites the marker (not atomic CAS); make it atomic or lock-serialized, with a probe forcing takeover between the compare and the overwrite;
-- **marker-write crashes:** markers are written with a direct `writeFileSync`; a crash between creation/truncation and the JSON write can leave an empty marker that strands the note. Make marker writes atomic (temp + rename) or repair empty markers, with a deterministic crash probe.
+**Status: resolved at an explicit option-2 contract (verified ADVANCE).** The hardening closed reclaim atomicity and marker-write crashes; the corrected serialization removed the destructive stale-owner cleanup so no code path deletes a durable record a replacement is adopting, and creation is serialized by the marker's `O_EXCL` (`linkSync`). The recorded contract: an already-authorized in-flight delivery may finish and be adopted after takeover, so the original "a superseded owner cannot deliver" invariant is **not** met, and reclaim's compare-to-rename window is bounded, not eliminated. See [`24-delivery-serialization.md`](24-delivery-serialization.md) / [`25-serialization-verify.md`](25-serialization-verify.md).
 
 Documented residuals (unchanged): free-running multi-process races untested; a committed reservation whose recorded-destination record is externally destroyed strands; legacy bare/empty markers inherit that strand.
 
