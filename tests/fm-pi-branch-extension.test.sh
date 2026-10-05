@@ -591,6 +591,19 @@ const pi = {
   },
   sendMessage(message, options) {
     sentToMain.push({ message, options: options ?? {} });
+    // Pi stores a sent custom message as a `custom_message` session entry, which
+    // is what makes a durable routine delivery recognizable on reload. Record
+    // only notes that carry a durable identity so the scripted entry lists the
+    // other tests rely on stay unchanged.
+    if (message && typeof message === "object" && message.details !== undefined) {
+      activeMainSession.getEntries().push({
+        type: "custom_message",
+        customType: message.customType,
+        content: message.content,
+        details: message.details,
+        display: message.display,
+      });
+    }
   },
   sendUserMessage(content, options) {
     mainUserMessages.push({ content, options: options ?? {} });
@@ -5937,6 +5950,173 @@ EOF
   pass "a durable-committed routine row is re-presented once across a failed cursor write, then stays read"
 }
 
+# Symmetric F09 experiment at the delivery boundary: the identical injected
+# cursor-write failure on the identical committed routine row. The existing path
+# delivers twice (deliver, fail the cursor write, deliver again on recovery);
+# with durable delivery identity selected the stored note is recognized on
+# recovery and delivered exactly once. Expected copies per arm are asserted in
+# the driver so one experiment proves both halves of the claim.
+test_f09_durable_delivery_identity_makes_routine_notes_exactly_once() {
+  local repo fakebin out status real_bash arm
+  repo="$TMP_ROOT/f09-durable-delivery-root"
+  fakebin="$TMP_ROOT/f09-durable-delivery-fakebin"
+  real_bash=$(command -v bash)
+  mkdir -p "$fakebin"
+  install_pi_branch_extension_fixture "$repo"
+  cat > "$fakebin/bash" <<'SH'
+#!/bin/sh
+armed=$(cat "$FM_TEST_FAIL_ARM" 2>/dev/null || printf '')
+if [ -n "$armed" ] && [ "$1" = "$FM_TEST_OUTCOME_SCRIPT" ] && [ "$2" = "$armed" ]; then
+  : > "$FM_TEST_FAIL_ARM"
+  echo "injected cursor-write failure" >&2
+  exit 9
+fi
+exec "$FM_TEST_REAL_BASH" "$@"
+SH
+  chmod +x "$fakebin/bash"
+  for arm in existing:2: durable:1:1; do
+    local label expect flag home
+    label=${arm%%:*}
+    expect=$(printf '%s' "$arm" | cut -d: -f2)
+    flag=$(printf '%s' "$arm" | cut -d: -f3)
+    home="$TMP_ROOT/f09-durable-delivery-$label"
+    mkdir -p "$home/state" "$home/config"
+    PATH="$fakebin:$PATH" PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+      FM_TEST_REAL_BASH="$real_bash" FM_TEST_OUTCOME_SCRIPT="$ROOT/bin/fm-branch-outcome.sh" \
+      FM_TEST_FAIL_ARM="$home/state/f09-durable-fail-arm" FM_TEST_EXPECT_COPIES="$expect" \
+      FM_PI_DURABLE_DELIVERY="$flag" DRIVER_PRELUDE="$DRIVER_PRELUDE" \
+      node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
+const prelude = process.env.DRIVER_PRELUDE;
+await eval(`(async () => { ${prelude}; globalThis.__t = { fire, outcomeScript, sentToMain, defaultSessionCtx }; })()`);
+const { fire, outcomeScript, sentToMain, defaultSessionCtx } = globalThis.__t;
+import { writeFileSync } from "node:fs";
+
+const failArm = process.env.FM_TEST_FAIL_ARM;
+const expectCopies = Number(process.env.FM_TEST_EXPECT_COPIES);
+const armStoreFailure = (subcommand) => writeFileSync(failArm, subcommand);
+const storedRows = () => outcomeScript(["list", "--recent", "50"]).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+const routineCopies = (summary) => sentToMain.filter(
+  (sent) => sent.message.customType === "fm-branch-merge" && sent.message.content.includes(summary),
+).length;
+
+await fire("session_start", {}, defaultSessionCtx);
+const summary = "durable delivery identity note under a failed cursor write";
+outcomeScript(["append", "--task", "fleet", "--verdict", "routine", "--summary", summary]);
+if (storedRows().length !== 1) throw new Error("the durable commit did not record exactly one routine row");
+
+armStoreFailure("mark-read");
+await fire("turn_end", {}, defaultSessionCtx);
+if (routineCopies(summary) !== 1) {
+  throw new Error(`the row was not presented exactly once before the cursor failure: ${routineCopies(summary)}`);
+}
+if (outcomeScript(["unread"]) === "") throw new Error("a failed cursor write still marked the row read");
+if (storedRows().length !== 1) throw new Error("the failed cursor write changed the stored row");
+
+armStoreFailure("");
+await fire("turn_end", {}, defaultSessionCtx);
+if (routineCopies(summary) !== expectCopies) {
+  throw new Error(`recovery delivered the routine note ${routineCopies(summary)} times, expected ${expectCopies}`);
+}
+if (outcomeScript(["unread"]) !== "") throw new Error("recovery did not advance the cursor past the row");
+if (storedRows().length !== 1) throw new Error("recovery changed the stored row");
+
+await fire("turn_end", {}, defaultSessionCtx);
+if (routineCopies(summary) !== expectCopies) {
+  throw new Error(`the routine note kept being delivered after the cursor advanced: ${routineCopies(summary)}`);
+}
+process.exit(0);
+EOF
+    status=$?
+    out=$(cat "$TMP_ROOT/node-output")
+    expect_code 0 "$status" "the $label arm must yield $expect routine deliveries: $out"
+  done
+  pass "durable delivery identity makes a committed routine note exactly once while the existing path duplicates"
+}
+
+# Adversarial attack on the new boundary. Delivery succeeds but the ack never
+# persists, then the store is reconciled repeatedly across reloads and a fresh
+# owner (takeover) with the row still unread. Durable identity must hold delivery
+# at exactly one, lose nothing, and key on sequence rather than note text.
+test_f09_durable_delivery_identity_survives_replay_and_takeover() {
+  local repo home fakebin out status real_bash
+  repo="$TMP_ROOT/f09-durable-replay-root"
+  home="$TMP_ROOT/f09-durable-replay-home"
+  fakebin="$home/fakebin"
+  real_bash=$(command -v bash)
+  mkdir -p "$home/state" "$home/config" "$fakebin"
+  install_pi_branch_extension_fixture "$repo"
+  cat > "$fakebin/bash" <<'SH'
+#!/bin/sh
+armed=$(cat "$FM_TEST_FAIL_ARM" 2>/dev/null || printf '')
+if [ -n "$armed" ] && [ "$1" = "$FM_TEST_OUTCOME_SCRIPT" ] && [ "$2" = "$armed" ]; then
+  : > "$FM_TEST_FAIL_ARM"
+  echo "injected cursor-write failure" >&2
+  exit 9
+fi
+exec "$FM_TEST_REAL_BASH" "$@"
+SH
+  chmod +x "$fakebin/bash"
+  PATH="$fakebin:$PATH" PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_TEST_REAL_BASH="$real_bash" FM_TEST_OUTCOME_SCRIPT="$ROOT/bin/fm-branch-outcome.sh" \
+    FM_TEST_FAIL_ARM="$home/state/f09-replay-fail-arm" FM_PI_DURABLE_DELIVERY="1" DRIVER_PRELUDE="$DRIVER_PRELUDE" \
+    node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
+const prelude = process.env.DRIVER_PRELUDE;
+await eval(`(async () => { ${prelude}; globalThis.__t = { fire, outcomeScript, sentToMain, defaultSessionCtx }; })()`);
+const { fire, outcomeScript, sentToMain, defaultSessionCtx } = globalThis.__t;
+import { writeFileSync } from "node:fs";
+
+const failArm = process.env.FM_TEST_FAIL_ARM;
+const armStoreFailure = (subcommand) => writeFileSync(failArm, subcommand);
+const routineCopies = (summary) => sentToMain.filter(
+  (sent) => sent.message.customType === "fm-branch-merge" && sent.message.content.includes(summary),
+).length;
+
+await fire("session_start", {}, defaultSessionCtx);
+const first = "durable note whose ack never persists";
+outcomeScript(["append", "--task", "fleet", "--verdict", "routine", "--summary", first]);
+
+// Every ack attempt fails, so the row stays unread across every reconcile.
+armStoreFailure("mark-read");
+await fire("turn_end", {}, defaultSessionCtx);
+if (routineCopies(first) !== 1) throw new Error(`the note was not delivered exactly once: ${routineCopies(first)}`);
+if (outcomeScript(["unread"]) === "") throw new Error("the armed ack failure did not leave the row unread");
+
+// Replay and takeover with the row still unread: reload the session and
+// reconcile again. The stored note is found each time, so delivery stays at one
+// and nothing is lost.
+const replay = async () => {
+  armStoreFailure("mark-read");
+  await fire("session_start", {}, defaultSessionCtx);
+  armStoreFailure("mark-read");
+  await fire("turn_end", {}, defaultSessionCtx);
+};
+await replay();
+if (routineCopies(first) !== 1) throw new Error(`replay re-delivered the note: ${routineCopies(first)}`);
+await replay();
+if (routineCopies(first) !== 1) throw new Error(`takeover re-delivered the note: ${routineCopies(first)}`);
+if (outcomeScript(["unread"]) === "") throw new Error("replay unexpectedly advanced the cursor");
+
+// Recovered: the ack persists and the row leaves the unread set, still one copy.
+armStoreFailure("");
+await fire("turn_end", {}, defaultSessionCtx);
+if (routineCopies(first) !== 1) throw new Error(`recovery changed the delivery count: ${routineCopies(first)}`);
+if (outcomeScript(["unread"]) !== "") throw new Error("recovery did not advance the cursor past the row");
+
+// The identity is (sequence, presentation target), not note text: a second row
+// with the same text is a genuinely new delivery.
+const second = first;
+outcomeScript(["append", "--task", "fleet", "--verdict", "routine", "--summary", second]);
+await fire("turn_end", {}, defaultSessionCtx);
+if (routineCopies(second) !== 2) throw new Error(`a distinct sequence was suppressed as a duplicate: ${routineCopies(second)}`);
+if (outcomeScript(["unread"]) !== "") throw new Error("the second row was not acknowledged");
+process.exit(0);
+EOF
+  status=$?
+  out=$(cat "$TMP_ROOT/node-output")
+  expect_code 0 "$status" "the durable boundary must survive replay and takeover with exactly one delivery: $out"
+  pass "durable delivery identity keeps one delivery across repeated ack failure, replay, and takeover, and separates sequences"
+}
+
 test_extension_registered_provider_resolves_in_the_branch() {
   local repo home out status
   repo="$TMP_ROOT/extprov-root"
@@ -6119,4 +6299,6 @@ test_session_replacement_during_delivery_neither_loses_nor_duplicates
 test_store_failure_during_delivery_neither_loses_nor_duplicates
 test_mark_read_failure_keeps_routine_redelivery_and_captain_deduplication
 test_f09_durable_committed_routine_row_is_re_presented_across_cursor_failure
+test_f09_durable_delivery_identity_makes_routine_notes_exactly_once
+test_f09_durable_delivery_identity_survives_replay_and_takeover
 test_durable_provider_selection_routes_through_the_bridge

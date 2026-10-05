@@ -161,6 +161,10 @@ const effortPinFile = join(config, "supervision-branch-effort");
 const durableBridgeCli =
   process.env.FM_SUPERVISION_BRIDGE_CLI || join(fmRoot, "runtime", "pi-durable", "src", "bridge-cli.ts");
 const durableSocketPath = join(state, "pi-durable", "sidecar.sock");
+// Opt-in durable delivery identity for routine notes. Off keeps the pre-spike
+// presentation path exactly; on, a routine delivery is recognized on reload by
+// its own stored record instead of being re-sent after a failed cursor write.
+const durableDeliveryEnabled = /^(1|true|yes)$/i.test(process.env.FM_PI_DURABLE_DELIVERY ?? "");
 // Provider selection is immutable for the life of the session, matching the
 // "provider selection becomes immutable for each accepted operation" contract.
 let cachedExecutionProvider: ExecutionProvider | null = null;
@@ -182,6 +186,10 @@ const MIRROR_MESSAGE_CAP = 4000;
 const MERGE_NOTE_BOAT = "⛵";
 const VISIBLE_OUTCOME_ANCHOR = "⚓";
 const VISIBLE_OUTCOME_ENTRY_TYPE = "fm-branch-visible-outcome";
+// The custom type of a routine merge note. Pi stores a sent custom message as a
+// `custom_message` session entry, so this type names both the presentation
+// target and, with the embedded store sequence, the durable delivery identity.
+const ROUTINE_NOTE_ENTRY_TYPE = "fm-branch-merge";
 // The processing half of the captain-outcome contract. The visible entry
 // above is the DISPLAY: crash-safe and exact-once. This hidden, typed request
 // is the PROCESSING: it opens the one turn in which main acts on the outcome,
@@ -495,7 +503,7 @@ function writeMirrorCursor(cursor: MirrorCursor): void {
 
 type ReadonlyEntries = {
   getSessionFile(): string | undefined;
-  getEntries(): Array<{ type: string; customType?: string; data?: unknown }>;
+  getEntries(): Array<{ type: string; customType?: string; data?: unknown; details?: unknown }>;
 };
 
 function parseOutcomeRow(value: unknown): OutcomeRow | null {
@@ -523,6 +531,20 @@ function sameOutcome(left: OutcomeRow, right: OutcomeRow): boolean {
     left.verdict === right.verdict &&
     left.summary === right.summary &&
     left.silent === right.silent;
+}
+
+type RoutineDeliveryRecord = OutcomeRow & { version: 1 };
+
+// A routine note carries its own durable delivery record in the stored custom
+// message's `details` (Pi keeps details out of model context). The record's
+// store sequence is the delivery identity and the custom type is the
+// presentation target; the main session log is the destination. A record that
+// matches on sequence but not content is a conflict, never a duplicate to
+// absorb.
+function parseRoutineDeliveryRecord(value: unknown): RoutineDeliveryRecord | null {
+  if (!value || typeof value !== "object" || (value as { version?: unknown }).version !== 1) return null;
+  const row = parseOutcomeRow(value);
+  return row ? { version: 1, ...row } : null;
 }
 
 // Volatile mirror-collection state. Instance-scoped and cleared at the
@@ -1017,12 +1039,30 @@ export default function (pi: ExtensionAPI) {
 
   function deliverRoutineOutcome(row: OutcomeRow): void {
     const message = {
-      customType: "fm-branch-merge",
+      customType: ROUTINE_NOTE_ENTRY_TYPE,
       content: `${MERGE_NOTE_BOAT} ${row.task}: ${row.summary}`,
       display: !row.silent,
+      details: durableDeliveryEnabled ? ({ version: 1, ...row } as RoutineDeliveryRecord) : undefined,
     };
     if (mainStreaming) pi.sendMessage(message, { deliverAs: "nextTurn" });
     else pi.sendMessage(message, {});
+  }
+
+  // Routine counterpart of ensureVisibleCaptainOutcome. The stored custom
+  // message is its own record, so a reload after delivery and before mark-read
+  // finds it by store sequence and delivers nothing again. A conflicting record
+  // for one sequence fails closed. Return true once delivery is recorded.
+  function ensureRoutineOutcome(row: OutcomeRow): boolean {
+    if (!currentMainSession || row.verdict !== "routine") return false;
+    for (const entry of currentMainSession.getEntries()) {
+      if (entry.type !== "custom_message" || entry.customType !== ROUTINE_NOTE_ENTRY_TYPE) continue;
+      const recorded = parseRoutineDeliveryRecord(entry.details);
+      if (!recorded || recorded.seq !== row.seq) continue;
+      if (!sameOutcome(recorded, row)) return false;
+      return true;
+    }
+    deliverRoutineOutcome(row);
+    return true;
   }
 
   // Captain rows that are read (their visible entry exists) but not yet
@@ -1183,12 +1223,14 @@ export default function (pi: ExtensionAPI) {
         // because a routine note is a plain message with no sequence-keyed
         // record to recognize. A captain row cannot duplicate that way -
         // ensureVisibleCaptainOutcome finds its own earlier entry by store
-        // sequence. Closing the routine gap needs a durable, idempotent
-        // representation for routine delivery, which changes the delivery
-        // contract rather than this ordering, so it is deliberately not done
-        // here.
+        // sequence. Durable delivery identity closes that gap when selected: a
+        // routine note is recognized by its own stored record, exactly as a
+        // captain visible entry already is. When not selected the presentation
+        // path is unchanged.
         if (row.verdict === "captain") {
           if (!ensureVisibleCaptainOutcome(row)) return false;
+        } else if (durableDeliveryEnabled) {
+          if (!ensureRoutineOutcome(row)) return false;
         } else {
           deliverRoutineOutcome(row);
         }
