@@ -20,7 +20,6 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { runDurableDispatch } from "../src/bridge.ts";
-import { createOutcomeSink } from "../src/outcome-sink.ts";
 import { DurableSidecar } from "../src/service.ts";
 import { SidecarClient, sidecarRequest } from "../src/sidecar-client.ts";
 
@@ -85,10 +84,10 @@ async function serve(): Promise<void> {
     socketPath: sidecar.socketPath,
     homeId: sidecar.homeId,
     ...authority,
+    outcomeScript: outcomeScript ?? "",
   });
-  const sink = createOutcomeSink({ scriptPath: outcomeScript ?? "" });
   const dispatched = await runDurableDispatch(
-    { transport, sink },
+    { transport },
     { operationId: "op-restart", prompt: "p", payload: { task: "T1" } },
   );
   const health = await sidecarRequest(sidecar.socketPath, {

@@ -21,10 +21,16 @@ export const DURABLE_STATE_SUBDIR = "pi-durable";
 export const WAKE_BATCH_FILE = "wake-batch.json";
 export const WAKE_BATCH_COMPLETED_FILE = "wake-batch-completed";
 
-type WakeBatchRecord = {
-  key: string;
-  batch: number;
-  operationId: string;
+type WakeBatchEntry = { batch: number; operationId: string };
+
+/**
+ * All pending wake batches, keyed by their scope. A single slot would let two
+ * interleaved row sets displace each other's operation id before either
+ * completes.
+ */
+type WakeBatchFile = {
+  nextBatch: number;
+  batches: Record<string, WakeBatchEntry>;
 };
 
 /**
@@ -36,6 +42,9 @@ type WakeBatchRecord = {
  * operation id; a new or completed batch gets a fresh random id. The id is
  * persisted before the dispatch, so a process restart can neither reuse an id
  * for a new batch nor lose the id of a batch that is still retrying.
+ *
+ * Every pending key keeps its own slot, so two interleaved row sets cannot
+ * displace each other's operation id before either completes.
  */
 export function durableWakeOperationId(input: {
   stateDir: string;
@@ -53,19 +62,22 @@ export function durableWakeOperationId(input: {
   ].join("\u0000");
   const batchPath = join(dir, WAKE_BATCH_FILE);
   const completedPath = join(dir, WAKE_BATCH_COMPLETED_FILE);
-  const pending = readWakeBatch(batchPath);
+  const pending = readWakeBatchFile(batchPath);
   let completed = "";
   try {
     completed = readFileSync(completedPath, "utf8").trim();
   } catch {
     completed = "";
   }
-  if (pending && pending.key === key && completed !== pending.operationId) {
-    return { operationId: pending.operationId, batch: pending.batch };
+  const existing = pending.batches[key];
+  if (existing && completed !== existing.operationId) {
+    return { operationId: existing.operationId, batch: existing.batch };
   }
-  const batch = (pending?.batch ?? 0) + 1;
+  const batch = pending.nextBatch;
   const operationId = `fm:${input.homeId}:supervision:batch-${batch}:${randomUUID()}`;
-  writeAtomic(batchPath, `${JSON.stringify({ key, batch, operationId })}\n`);
+  pending.batches[key] = { batch, operationId };
+  pending.nextBatch = batch + 1;
+  writeAtomic(batchPath, `${JSON.stringify(pending)}\n`);
   return { operationId, batch };
 }
 
@@ -73,24 +85,47 @@ export function durableWakeOperationId(input: {
 export function markDurableWakeCompleted(stateDir: string, operationId: string): void {
   const dir = join(stateDir, DURABLE_STATE_SUBDIR);
   mkdirSync(dir, { recursive: true });
+  const batchPath = join(dir, WAKE_BATCH_FILE);
+  const pending = readWakeBatchFile(batchPath);
+  let changed = false;
+  for (const key of Object.keys(pending.batches)) {
+    if (pending.batches[key]!.operationId === operationId) {
+      delete pending.batches[key];
+      changed = true;
+    }
+  }
+  if (changed) writeAtomic(batchPath, `${JSON.stringify(pending)}\n`);
   writeAtomic(join(dir, WAKE_BATCH_COMPLETED_FILE), `${operationId}\n`);
 }
 
-function readWakeBatch(path: string): WakeBatchRecord | null {
+function readWakeBatchFile(path: string): WakeBatchFile {
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<WakeBatchRecord>;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<WakeBatchFile>;
     if (
-      typeof parsed.key === "string" &&
-      typeof parsed.batch === "number" &&
-      Number.isInteger(parsed.batch) &&
-      typeof parsed.operationId === "string"
+      typeof parsed.nextBatch === "number" &&
+      Number.isInteger(parsed.nextBatch) &&
+      parsed.nextBatch >= 1 &&
+      typeof parsed.batches === "object" &&
+      parsed.batches !== null &&
+      !Array.isArray(parsed.batches)
     ) {
-      return { key: parsed.key, batch: parsed.batch, operationId: parsed.operationId };
+      const batches: Record<string, WakeBatchEntry> = {};
+      for (const [key, value] of Object.entries(parsed.batches)) {
+        const entry = value as Partial<WakeBatchEntry>;
+        if (
+          typeof entry.batch === "number" &&
+          Number.isInteger(entry.batch) &&
+          typeof entry.operationId === "string"
+        ) {
+          batches[key] = { batch: entry.batch, operationId: entry.operationId };
+        }
+      }
+      return { nextBatch: parsed.nextBatch, batches };
     }
   } catch {
-    // A missing or corrupt record is a new batch.
+    // A missing or corrupt record starts a new batch file.
   }
-  return null;
+  return { nextBatch: 1, batches: {} };
 }
 
 function writeAtomic(path: string, content: string): void {

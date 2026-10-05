@@ -96,7 +96,12 @@ export type DispatchTransport = {
     prompt: string;
     payload: JsonValue;
   }): Promise<DispatchOutcome>;
-  recordReceipt(operationId: string, seq: number): Promise<void>;
+  /**
+   * Append the settled operation's outcome and record its delivery receipt as
+   * one authority-guarded unit on the sidecar. The sidecar owns the append, so
+   * a replacement cannot land between the authority check and the write.
+   */
+  appendOutcome(input: { operationId: string; result: CandidateResult }): Promise<{ seq: number }>;
 };
 
 export type DurableDispatchInput = {
@@ -117,12 +122,12 @@ export type DurableDispatchResult = {
  * sink.
  *
  * A settled repeat whose receipt was already recorded returns that receipt and
- * appends nothing, so a repeated result cannot commit a conflicting outcome. A
- * settled repeat with no receipt is reconciled through the sink read-back when
- * the sink has one, and refused as before when it does not.
+ * appends nothing, so a repeated result cannot commit a conflicting outcome.
+ * The sidecar performs the append and the receipt under its ownership lock, so
+ * an owner replacement cannot slip a stale outcome row into the store.
  */
 export async function runDurableDispatch(
-  deps: { transport: DispatchTransport; sink: OutcomeSink },
+  deps: { transport: DispatchTransport },
   input: DurableDispatchInput,
 ): Promise<DurableDispatchResult> {
   const dispatched = await deps.transport.dispatch({
@@ -137,30 +142,22 @@ export async function runDurableDispatch(
     return { seq: dispatched.receipt.seq, replayed: true };
   }
   const candidate = parseCandidateResult(dispatched.result);
-  // Outcome mutation boundary: revalidate current authority with the sidecar
-  // after settlement and before anything is appended or receipted. An owner
-  // replacement between the model run and this point refuses here, so the
-  // stale operation never appends an outcome or records a receipt.
-  const verified = await deps.transport.dispatch({
-    operationId: input.operationId,
-    prompt: input.prompt,
-    payload: input.payload,
-  });
-  if (!verified.ok) {
-    throw new BridgeError(verified.code, verified.message);
-  }
   let seq: number;
   try {
-    seq = await deps.sink.appendOrGet(input.operationId, candidate);
+    seq = (
+      await deps.transport.appendOutcome({ operationId: input.operationId, result: candidate })
+    ).seq;
   } catch (error) {
-    // The outcome may or may not have been applied; never declare success.
+    // A definite refusal means nothing was appended; surface its own code. Any
+    // other failure may or may not have applied the outcome, so never declare
+    // success.
+    if (error instanceof BridgeError) throw error;
     const reason = error instanceof Error ? error.message : String(error);
     throw new BridgeError(
       "RECONCILE_REQUIRED",
-      `outcome append-or-get could not be completed (${reason}); reconcile before retrying`,
+      `outcome append could not be completed (${reason}); reconcile before retrying`,
     );
   }
-  await deps.transport.recordReceipt(input.operationId, seq);
   return dispatched.replayed
     ? { seq, replayed: true, reconciled: true }
     : { seq, replayed: false };

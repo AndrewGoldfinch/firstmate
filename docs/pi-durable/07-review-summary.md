@@ -26,11 +26,15 @@ The existing supervision path stays the default and is unchanged when the opt-in
 
 ## Review fixes (this pass)
 
-1. Current generation, claim, row scope, and cancellation state are re-enforced at the outcome mutation boundary (acceptance, settlement, receipt), serialized with ownership changes; a replacement refuses the stale settlement, append, and receipt.
-2. The store-owner lock publishes fully written metadata with `link(2)` and reclaims stale locks with an atomic `rename(2)`; simultaneous starts and simultaneous stale reclaims have exactly one winner.
+1. Current generation, claim, row scope, and cancellation state are re-enforced at the outcome mutation boundary (acceptance, settlement, receipt), serialized with ownership changes; a replacement refuses the stale settlement and receipt. Independent verification (`data/pi-durable-review-verify/report.md`) found the stale **append** was still possible in the window between the bridge's re-check and its sink write; on this branch the sidecar performs the append and the receipt as one ownership-locked unit (`appendOutcome`), and a replacement-race test proves no stale row is left behind.
+2. The store-owner lock publishes fully written metadata with `link(2)` and reclaims stale locks with an atomic `rename(2)`. Independent verification (`data/pi-durable-review-verify/report.md`) **falsified** the one-winner claim under sustained start/reclaim churn: a reclaim that observed a missing file could rename away and delete a live owner's record. On this branch reclaim is identity-checked (nonce/inode) and never deletes a record it cannot confirm, and a sustained multi-process churn regression reproduces the old failure and passes on the fix; the single-burst 8-worker tests were insufficient.
 3. Each accepted wake batch persists its own operation identity and keeps it across retries and restarts; the retry comparison includes the prompt and pinned configuration digest.
 4. The operation id is passed to Pi Durable as `requestId`, and an accepted-but-unsettled retry reconnects the original submission, retrieves its result, and settles exactly one outcome instead of returning `RECONCILE_REQUIRED`.
 5. The outcome sink takes the operation id as an explicit operation key and appends atomically or returns the existing row, so distinct operations with identical text cannot collide.
+
+### Independent verification (review fixes)
+
+An independent adversarial pass over the review fixes is recorded at `data/pi-durable-review-verify/report.md`. It falsified the store-owner lock (finding 2) and partially falsified the outcome-boundary fix (finding 1: the receipt was refused for a replaced generation but the append was still writable), and flagged a latent single-pending-slot wake-batch issue (finding 3). This branch fixes all three with regressions: a sustained multi-process lock race, a replacement racing the guarded append, and interleaved pending wake batches. The prototype stays experimental; the benefit verdicts below are unchanged.
 
 ## Read in order
 
@@ -64,14 +68,14 @@ GitHub: [report](https://github.com/AndrewGoldfinch/firstmate/blob/experiment/pi
 cd runtime/pi-durable
 npm ci
 npm run typecheck          # clean
-npm test                   # 74/74
+npm test                   # 81/81
 node --test tests/milestone.test.ts  # the reviewer's end-to-end milestone
 node eval/main.ts          # regenerates docs/pi-durable/eval-results.json + report
 ```
 
 `node eval/main.ts` also runs a bounded real-model pilot when a provider credential is reachable; otherwise it records the pilot as not-covered.
 The Docker restart lane needs a running Docker daemon (verified against server 29.8.2).
-The seam regressions are `tests/fm-pi-branch-extension.test.sh` and `tests/fm-branch-supervision.test.sh` (2/2 pass, run with `bin/fm-test-run.sh`).
+The seam regressions are `tests/fm-pi-branch-extension.test.sh`, `tests/fm-branch-supervision.test.sh`, and `tests/fm-wake-drain-outcome-backstop.test.sh` (all pass, run with `bin/fm-test-run.sh`).
 Socket-dependent tests are environment-sensitive: the reviewer's environment blocked Unix-socket listeners (`listen EPERM`), so a run without socket support records those cases as not-covered rather than passing them.
 
 ## Results at a glance
@@ -110,7 +114,7 @@ Socket-dependent tests are environment-sensitive: the reviewer's environment blo
 
 - [ ] With provider selection off, is the existing supervision path behaviorally unchanged? (`.pi/extensions/fm-branch-supervision.ts` around the `executionProvider()` branch)
 - [ ] Are the adapter obligations enforced with tests — store-owner lock (simultaneous start and simultaneous stale reclaim), changed-payload/prompt/configuration conflict refusal, and operation identity per wake batch?
-- [ ] Is ownership re-checked at the outcome mutation boundary, with a replacement test that refuses both the append and the receipt?
+- [x] Is ownership re-checked at the outcome mutation boundary, with a replacement test that refuses both the append and the receipt? (the sidecar now owns the append under the ownership lock; `runtime/pi-durable/tests/bridge-integration.test.ts`)
 - [ ] Does the durable path route candidate results through the existing outcome sink without acknowledging wake rows or mutating the task lifecycle directly?
 - [ ] Are the not-covered and known-gap cases honestly marked, never faked?
 - [ ] Is there any arbitrary shell added? (There should be none.)

@@ -19,6 +19,8 @@ import { isAbsolute, join } from "node:path";
 import { OwnerLock } from "./lock.ts";
 import { OperationStore } from "./store.ts";
 import { DurableProvider, dependencyVersions, type ModelConfigurer } from "./provider.ts";
+import { createOutcomeSink } from "./outcome-sink.ts";
+import { parseCandidateResult, type CandidateResult } from "./bridge.ts";
 import {
   DEFAULT_MAX_MESSAGE_BYTES,
   DEFAULT_MAX_OUTSTANDING,
@@ -33,6 +35,7 @@ import {
   parseRequest,
   pinnedConfigDigest,
   type AuthorityBinding,
+  type AppendOutcomeRequest,
   type CancelRequest,
   type CancelResult,
   type DispatchRequest,
@@ -306,6 +309,8 @@ export class DurableSidecar {
         return { record: this.store.getOperation(request.operationId) };
       case "dispatch":
         return this.dispatchOperation(request);
+      case "appendOutcome":
+        return this.appendOutcome(request);
       case "receipt":
         return this.receipt(request);
       case "observe":
@@ -850,6 +855,65 @@ export class DurableSidecar {
       this.store.recordReceipt(request.operationId, request.seq, this.now());
       await this.barrier("receipt.after");
       return { recorded: true as const };
+    });
+  }
+
+  /**
+   * Append the settled operation's outcome and record its delivery receipt as
+   * one authority-guarded unit. The append runs inside the ownership lock, so a
+   * replacement cannot land between the authority check and the outcome write.
+   */
+  private async appendOutcome(request: AppendOutcomeRequest) {
+    return this.withOwnershipLock(async () => {
+      this.authorize(request);
+      const existing = this.store.getOperation(request.operationId);
+      if (!existing) {
+        throw new ProtocolError("NOT_FOUND", "unknown operation");
+      }
+      if (existing.supervisorId !== request.supervisorId) {
+        throw new ProtocolError("AUTHORITY_CONFLICT", "operation belongs to a different supervisor");
+      }
+      if (existing.ownerGeneration !== null && existing.ownerGeneration !== request.ownerGeneration) {
+        throw new ProtocolError(
+          "AUTHORITY_STALE",
+          "operation belongs to a replaced ownership generation; refusing its outcome",
+        );
+      }
+      if (existing.state !== "settled") {
+        throw new ProtocolError("RECONCILE_REQUIRED", `operation is ${existing.state}, not settled`);
+      }
+      if (existing.receipt) {
+        return { seq: existing.receipt.seq, recorded: true as const };
+      }
+      let candidate: CandidateResult;
+      try {
+        candidate = parseCandidateResult(request.result);
+      } catch (error) {
+        throw new ProtocolError(
+          "BAD_REQUEST",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      await this.barrier("appendOutcome.before");
+      const sink = createOutcomeSink({
+        scriptPath: request.outcomeScript,
+        env: { ...process.env, FM_HOME: this.homeId },
+      });
+      let seq: number;
+      try {
+        seq = await sink.appendOrGet(request.operationId, candidate);
+      } catch (error) {
+        throw new ProtocolError(
+          "RECONCILE_REQUIRED",
+          `outcome append could not be completed (${
+            error instanceof Error ? error.message : String(error)
+          }); reconcile before retrying`,
+        );
+      }
+      await this.barrier("appendOutcome.commit");
+      this.store.recordReceipt(request.operationId, seq, this.now());
+      await this.barrier("appendOutcome.after");
+      return { seq, recorded: true as const };
     });
   }
 

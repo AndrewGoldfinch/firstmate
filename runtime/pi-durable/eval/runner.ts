@@ -16,7 +16,6 @@ import { fauxAssistantMessage, fauxProvider, type MutableModels } from "@earendi
 import { DurableSidecar } from "../src/service.ts";
 import { runDurableDispatch } from "../src/bridge.ts";
 import { SidecarClient } from "../src/sidecar-client.ts";
-import { createOutcomeSink } from "../src/outcome-sink.ts";
 import type { CandidateResult } from "../src/bridge.ts";
 import { EffectLedger } from "./effects.ts";
 import type { FleetTask } from "./fleet.ts";
@@ -59,11 +58,9 @@ function outcomeRecords(lines: string): OutcomeRecord[] {
 }
 
 async function readOutcomeStore(scriptPath: string, env: NodeJS.ProcessEnv): Promise<OutcomeRecord[]> {
-  const sink = createOutcomeSink({ scriptPath, env });
-  // The sink only appends; read through the script itself.
+  // Read through the script itself.
   const { execFileSync } = await import("node:child_process");
   const out = execFileSync("bash", [scriptPath, "list", "--recent", "200"], { env, encoding: "utf8" });
-  void sink;
   return outcomeRecords(out);
 }
 
@@ -130,14 +127,14 @@ export async function runDurableScenario(input: DurableScenarioInput): Promise<A
       ownerGeneration: 1,
       wakeClaimId: "claim-1",
       rowIds: task.acceptedRows,
+      outcomeScript: input.outcomeScript,
     });
-    const sink = createOutcomeSink({ scriptPath: input.outcomeScript, env });
 
     faux.setResponses([fauxAssistantMessage(JSON.stringify(respond(task)))]);
     let settled = false;
     try {
       const result = await runDurableDispatch(
-        { transport, sink },
+        { transport },
         { operationId, prompt: `supervise ${task.id}`, payload: { task: task.id, rows: task.acceptedRows } },
       );
       ledger.apply(`outcome:${task.id}`, task.id, "branch");
@@ -154,7 +151,7 @@ export async function runDurableScenario(input: DurableScenarioInput): Promise<A
       faux.setResponses([fauxAssistantMessage(JSON.stringify(respond(task)))]);
       try {
         const result = await runDurableDispatch(
-          { transport, sink },
+          { transport },
           { operationId, prompt: `supervise ${task.id}`, payload: { task: task.id, rows: task.acceptedRows } },
         );
         ledger.apply(`outcome:${task.id}`, task.id, "branch");

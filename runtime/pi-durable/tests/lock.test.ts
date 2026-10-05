@@ -14,6 +14,7 @@ import { INVALID_LOCK_GRACE_MS, OwnerConflictError, OwnerLock, writeLockFile } f
 
 const scratch = mkdtempSync(join(tmpdir(), "fm-pi-durable-lock-"));
 const holdLock = fileURLToPath(new URL("./helpers/hold-lock.ts", import.meta.url));
+const churnLock = fileURLToPath(new URL("./helpers/churn-lock.ts", import.meta.url));
 
 /**
  * Start `count` hold-lock children at once and report each outcome. A child
@@ -140,6 +141,47 @@ test("an empty lock is respected while fresh and reclaimed once old", () => {
   );
   const old = new Date(Date.now() - INVALID_LOCK_GRACE_MS - 1_000);
   utimesSync(path, old, old);
+  const lock = OwnerLock.acquire(path, "/home/a");
+  lock.release();
+});
+
+/**
+ * Sustained multi-process race. Each worker holds and re-acquires repeatedly
+ * and re-reads the published record while it holds the lock, reporting a steal
+ * if the record ever names another process. The single-burst races above do not
+ * exercise the turnover that lets a reclaim observe a missing file and disturb
+ * a live owner, so this test drives sustained churn instead.
+ *
+ * Regression for the store-owner lock granting two processes the same lock.
+ */
+test("sustained churn never grants two owners the same lock", async () => {
+  const path = join(scratch, "sustained-churn.lock");
+  // Seed a stale record (dead pid) so the opening rounds race a reclaim.
+  writeLockFile(path, { homeId: "/home/a", pid: 0, startedAt: 0 });
+  const workers = 24;
+  const children = Array.from({ length: workers }, () =>
+    spawn(process.execPath, [churnLock, path, "/home/a", "2500", "1"], {
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
+  const outputs = await Promise.all(
+    children.map(
+      (child) =>
+        new Promise<string>((resolve) => {
+          let out = "";
+          child.stdout.setEncoding("utf8");
+          child.stdout.on("data", (chunk: string) => (out += chunk));
+          child.on("error", () => resolve(out));
+          child.on("exit", () => resolve(out));
+        }),
+    ),
+  );
+  const steals = outputs
+    .join("\n")
+    .split("\n")
+    .filter((line) => line.startsWith("STEAL "));
+  assert.deepEqual(steals, [], `sustained churn observed a second owner: ${steals.join("; ")}`);
+  // The lock is still usable after the storm.
   const lock = OwnerLock.acquire(path, "/home/a");
   lock.release();
 });

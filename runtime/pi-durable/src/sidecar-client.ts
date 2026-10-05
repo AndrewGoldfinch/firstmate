@@ -9,6 +9,7 @@
 import { connect } from "node:net";
 import {
   PROTOCOL_VERSION,
+  type AppendOutcomeResult,
   type CancelResult,
   type CancelScope,
   type DispatchResult,
@@ -16,7 +17,7 @@ import {
   type SidecarRequest,
   type SidecarResponse,
 } from "./protocol.ts";
-import type { DispatchOutcome, DispatchTransport } from "./bridge.ts";
+import { BridgeError, type CandidateResult, type DispatchOutcome, type DispatchTransport } from "./bridge.ts";
 
 export type SidecarClientOptions = {
   socketPath: string;
@@ -26,6 +27,8 @@ export type SidecarClientOptions = {
   ownerGeneration: number;
   wakeClaimId: string;
   rowIds: string[];
+  /** The outcome-store script the sidecar runs under its ownership lock. */
+  outcomeScript: string;
 };
 
 export async function sidecarRequest(
@@ -110,16 +113,21 @@ export class SidecarClient implements DispatchTransport {
     };
   }
 
-  async recordReceipt(operationId: string, seq: number): Promise<void> {
+  async appendOutcome(input: { operationId: string; result: CandidateResult }): Promise<{ seq: number }> {
     const response = await sidecarRequest(this.options.socketPath, {
       ...this.authority(),
-      op: "receipt",
-      operationId,
-      seq,
+      op: "appendOutcome",
+      operationId: input.operationId,
+      outcomeScript: this.options.outcomeScript,
+      result: input.result as never,
     });
     if (!response.ok) {
-      throw new Error(`sidecar refused the outcome receipt: ${response.error.code}`);
+      throw new BridgeError(
+        response.error.code,
+        `sidecar refused the outcome append: ${response.error.code}`,
+      );
     }
+    return { seq: (response.result as AppendOutcomeResult).seq };
   }
 
   /** Invoke one declared read tool under this client's authority binding. */

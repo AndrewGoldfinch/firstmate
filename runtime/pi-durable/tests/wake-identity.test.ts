@@ -105,3 +105,24 @@ test("the operation identity carries the home and generation", () => {
   assert.ok(identity.operationId.startsWith("fm:/home/alpha:supervision:batch-1:"));
   assert.ok(identity.operationId.length <= 256);
 });
+
+/**
+ * Regression for the single pending-slot displacement: two different row sets
+ * interleaved before either completes must each keep their own operation id
+ * and batch number.
+ */
+test("two interleaved pending batches keep their own identities", () => {
+  const state = stateDir("interleaved");
+  const base = { stateDir: state, homeId: "/home/a", generation: 5, wakeClaimId: "gen-5" };
+  const first = durableWakeOperationId({ ...base, rowIds: ["1"] });
+  const second = durableWakeOperationId({ ...base, rowIds: ["2"] });
+  assert.notEqual(first.operationId, second.operationId);
+  assert.equal(second.batch, first.batch + 1);
+  // Neither pending batch displaced the other: both are still retrievable.
+  const firstRetry = durableWakeOperationId({ ...base, rowIds: ["1"] });
+  const secondRetry = durableWakeOperationId({ ...base, rowIds: ["2"] });
+  assert.equal(firstRetry.operationId, first.operationId);
+  assert.equal(secondRetry.operationId, second.operationId);
+  assert.equal(firstRetry.batch, first.batch);
+  assert.equal(secondRetry.batch, second.batch);
+});

@@ -46,7 +46,16 @@ type LockFile = OwnerInfo & { nonce: string };
 type LockRead =
   | { kind: "missing" }
   | { kind: "valid"; info: LockFile }
-  | { kind: "invalid"; ageMs: number };
+  | { kind: "invalid"; ageMs: number; ino: number };
+
+/** The inode behind one path, or null when it cannot be read. */
+function inodeOf(path: string): number | null {
+  try {
+    return statSync(path).ino;
+  } catch {
+    return null;
+  }
+}
 
 function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -89,14 +98,17 @@ function readLock(path: string, now: () => number): LockRead {
     return { kind: "missing" };
   }
   let mtimeMs: number;
+  let ino: number;
   try {
-    mtimeMs = statSync(path).mtimeMs;
+    const stat = statSync(path);
+    mtimeMs = stat.mtimeMs;
+    ino = stat.ino;
   } catch {
     return { kind: "missing" };
   }
   const info = parseLock(text);
   if (info) return { kind: "valid", info };
-  return { kind: "invalid", ageMs: now() - mtimeMs };
+  return { kind: "invalid", ageMs: now() - mtimeMs, ino };
 }
 
 /** A held single-owner store lock. Release it exactly once. */
@@ -133,6 +145,12 @@ export class OwnerLock {
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
           const current = readLock(path, now);
+          if (current.kind === "missing") {
+            // link(2) refused because a file existed, but it is unreadable or
+            // gone now. Re-publish and re-observe rather than reclaiming a file
+            // this caller never inspected.
+            continue;
+          }
           if (current.kind === "valid" && isProcessAlive(current.info.pid)) {
             throw new OwnerConflictError(
               `store already owned by live process ${current.info.pid} for home ${current.info.homeId}`,
@@ -164,6 +182,12 @@ export class OwnerLock {
    */
   private static claimStale(path: string, current: LockRead, nonce: string, now: () => number): void {
     const claimed = `${path}.stale.${nonce}`;
+    // Identity of the file this caller observed. A valid observation is proven
+    // by its unique nonce; an unreadable one names no owner, so its inode is
+    // captured instead. Reclaim may only ever delete a file matching this
+    // identity.
+    const expectedNonce = current.kind === "valid" ? current.info.nonce : null;
+    const expectedIno = current.kind === "invalid" ? current.ino : null;
     try {
       renameSync(path, claimed);
     } catch {
@@ -171,11 +195,10 @@ export class OwnerLock {
       return;
     }
     const renamed = readLock(claimed, now);
-    const expectedNonce = current.kind === "valid" ? current.info.nonce : null;
-    if (
-      (expectedNonce === null && renamed.kind !== "valid") ||
-      (expectedNonce !== null && renamed.kind === "valid" && renamed.info.nonce === expectedNonce)
-    ) {
+    const claimedObserved =
+      (expectedNonce !== null && renamed.kind === "valid" && renamed.info.nonce === expectedNonce) ||
+      (expectedIno !== null && inodeOf(claimed) === expectedIno);
+    if (claimedObserved) {
       try {
         unlinkSync(claimed);
       } catch {
@@ -183,19 +206,27 @@ export class OwnerLock {
       }
       return;
     }
-    // The renamed record is not the one this caller inspected. Never delete
-    // it: put it back best-effort (without clobbering a newer lock) and let
-    // the retry observe the real owner.
+    // The renamed record is not the one this caller inspected: a newer owner
+    // published it after the observation. Put it back without clobbering a
+    // newer lock, and never delete a record this caller cannot confirm.
+    let restored = false;
     try {
       linkSync(claimed, path);
+      restored = true;
     } catch {
-      // A newer lock is already in place; leave it.
+      // A newer lock is already in place.
     }
-    try {
-      unlinkSync(claimed);
-    } catch {
-      // Already gone.
+    if (restored) {
+      try {
+        unlinkSync(claimed);
+      } catch {
+        // Already gone.
+      }
+      return;
     }
+    throw new OwnerConflictError(
+      `store lock at ${path} was replaced while being reclaimed; refusing to disturb the current owner`,
+    );
   }
 
   /** Release the lock only when this owner still holds it. */
@@ -219,16 +250,21 @@ export class OwnerLock {
       return;
     }
     // Another owner's lock was renamed by mistake; restore it without
-    // clobbering a newer lock and leave it held by its real owner.
+    // clobbering a newer lock and leave it held by its real owner. Never
+    // delete a record this caller cannot confirm.
+    let restored = false;
     try {
       linkSync(released, this.path);
+      restored = true;
     } catch {
       // A newer lock is already in place; leave it.
     }
-    try {
-      unlinkSync(released);
-    } catch {
-      // Already gone.
+    if (restored) {
+      try {
+        unlinkSync(released);
+      } catch {
+        // Already gone.
+      }
     }
   }
 }

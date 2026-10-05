@@ -11,7 +11,6 @@
 import { readFileSync } from "node:fs";
 import { runDurableDispatch } from "./bridge.ts";
 import { SidecarClient } from "./sidecar-client.ts";
-import { createOutcomeSink } from "./outcome-sink.ts";
 import type { JsonValue } from "./protocol.ts";
 
 type CliInput = {
@@ -38,10 +37,10 @@ async function main(): Promise<void> {
     ownerGeneration: input.ownerGeneration,
     wakeClaimId: input.wakeClaimId,
     rowIds: input.rowIds,
+    outcomeScript: input.outcomeScript,
   });
-  const sink = createOutcomeSink({ scriptPath: input.outcomeScript });
   const result = await runDurableDispatch(
-    { transport, sink },
+    { transport },
     { operationId: input.operationId, prompt: input.prompt, payload: input.payload },
   );
   process.stdout.write(`${JSON.stringify(result)}\n`);

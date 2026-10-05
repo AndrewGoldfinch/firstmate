@@ -50,6 +50,7 @@ export type OperationName =
   | "submit"
   | "inspect"
   | "dispatch"
+  | "appendOutcome"
   | "receipt"
   | "observe"
   | "observeAck"
@@ -64,6 +65,7 @@ export const OPERATION_NAMES: readonly OperationName[] = [
   "submit",
   "inspect",
   "dispatch",
+  "appendOutcome",
   "receipt",
   "observe",
   "observeAck",
@@ -208,6 +210,21 @@ export type ReceiptRequest = BaseRequest &
     seq: number;
   };
 
+/**
+ * Append the settled operation's outcome and record its delivery receipt as one
+ * authority-guarded unit. The sidecar owns the append, so a replacement cannot
+ * land between the authority check and the outcome write.
+ */
+export type AppendOutcomeRequest = BaseRequest &
+  AuthorityBinding & {
+    op: "appendOutcome";
+    supervisorId: string;
+    capabilityProfile: string;
+    operationId: string;
+    outcomeScript: string;
+    result: JsonValue;
+  };
+
 export type ObservationKind = "accepted" | "settlement" | "unresolved";
 
 /** One normalized, durable outbox observation. */
@@ -308,6 +325,7 @@ export type SidecarRequest =
   | SubmitRequest
   | InspectRequest
   | DispatchRequest
+  | AppendOutcomeRequest
   | ReceiptRequest
   | ObserveRequest
   | ObserveAckRequest
@@ -383,6 +401,8 @@ export type DispatchResult = {
 
 export type ReceiptResult = { recorded: true };
 
+export type AppendOutcomeResult = { seq: number; recorded: true };
+
 export type ObserveResult = {
   observations: Observation[];
   cursor: number;
@@ -400,6 +420,7 @@ export type SidecarResult =
   | SubmitResult
   | InspectResult
   | DispatchResult
+  | AppendOutcomeResult
   | ReceiptResult
   | ObserveResult
   | ObserveAckResult
@@ -598,6 +619,17 @@ export function parseRequest(raw: unknown): SidecarRequest {
         capabilityProfile: parseCapabilityProfile(source),
         operationId: asString(source, "operationId"),
         seq: parseGeneration(source, "seq"),
+      };
+    case "appendOutcome":
+      return {
+        ...base,
+        ...parseAuthority(source),
+        op: "appendOutcome",
+        supervisorId: asString(source, "supervisorId"),
+        capabilityProfile: parseCapabilityProfile(source),
+        operationId: asString(source, "operationId"),
+        outcomeScript: asString(source, "outcomeScript"),
+        result: requireJson(source, "result"),
       };
     case "observe": {
       const after = source.after === undefined ? undefined : parseGeneration(source, "after");

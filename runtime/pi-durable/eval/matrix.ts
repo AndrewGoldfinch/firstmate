@@ -14,8 +14,7 @@ import { createProvider, fauxAssistantMessage, fauxProvider, type Provider } fro
 import { DurableSidecar } from "../src/service.ts";
 import { runDurableDispatch } from "../src/bridge.ts";
 import { SidecarClient } from "../src/sidecar-client.ts";
-import { createOutcomeSink } from "../src/outcome-sink.ts";
-import type { CandidateResult, OutcomeSink } from "../src/bridge.ts";
+import type { CandidateResult } from "../src/bridge.ts";
 import type { DockerLaneResult } from "./docker-lane.ts";
 import type { PilotResult } from "./pilot.ts";
 import { SimulatedCrash } from "./runner.ts";
@@ -91,18 +90,14 @@ async function dispatch(
   operationId: string,
   outcomeScript: string,
   result: CandidateResult = RESULT,
-  sinkOverride?: OutcomeSink,
 ) {
   faux.setResponses([fauxAssistantMessage(JSON.stringify(result))]);
-  const transport = clientFor(sidecar);
-  const sink =
-    sinkOverride ??
-    createOutcomeSink({ scriptPath: outcomeScript, env: { ...process.env, FM_HOME: home } });
-  return runDurableDispatch({ transport, sink }, { operationId, prompt: "p", payload: { task: "T1" } });
+  const transport = clientFor(sidecar, outcomeScript);
+  return runDurableDispatch({ transport }, { operationId, prompt: "p", payload: { task: "T1" } });
 }
 
 /** The standard supervision client for one sidecar. */
-function clientFor(sidecar: DurableSidecar): SidecarClient {
+function clientFor(sidecar: DurableSidecar, outcomeScript: string): SidecarClient {
   return new SidecarClient({
     socketPath: sidecar.socketPath,
     homeId: sidecar.homeId,
@@ -111,6 +106,7 @@ function clientFor(sidecar: DurableSidecar): SidecarClient {
     ownerGeneration: 1,
     wakeClaimId: "claim-1",
     rowIds: ["row-T1"],
+    outcomeScript,
   });
 }
 
@@ -274,7 +270,7 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
     const home = caseHome(context, "F05");
     const { sidecar, faux, model } = await startSidecar(home, "tool.read.after");
     await ensure(sidecar, model);
-    const client = clientFor(sidecar);
+    const client = clientFor(sidecar, context.outcomeScript);
     await dispatch(sidecar, home, faux, "op-F05-seed", context.outcomeScript);
 
     let crashed = false;
@@ -322,7 +318,7 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
   // append when the sink cannot complete it.
   {
     const home = caseHome(context, "F06");
-    const { sidecar, faux, model } = await startSidecar(home, "receipt.before");
+    const { sidecar, faux, model } = await startSidecar(home, "appendOutcome.commit");
     await ensure(sidecar, model);
     try {
       await dispatch(sidecar, home, faux, "op-F06", context.outcomeScript);
@@ -333,28 +329,21 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
     const outcomes = await readOutcomes(context.outcomeScript, home);
 
     const blindHome = caseHome(context, "F06-blind");
-    const blind = await startSidecar(blindHome, "receipt.before");
+    const blind = await startSidecar(blindHome, "appendOutcome.commit");
     await ensure(blind.sidecar, blind.model);
     try {
       await dispatch(blind.sidecar, blindHome, blind.faux, "op-F06b", context.outcomeScript);
     } catch {
-      /* same boundary, retried below with a sink that cannot read back */
+      /* same boundary, retried below against an outcome store that cannot append */
     }
     let blindCode = "none";
-    const incapable: OutcomeSink = {
-      async appendOrGet(): Promise<number> {
-        throw new Error("an incapable sink must never be asked to append");
-      },
-    };
     try {
       await dispatch(
         blind.sidecar,
         blindHome,
         blind.faux,
         "op-F06b",
-        context.outcomeScript,
-        RESULT,
-        incapable,
+        `${context.outcomeScript}.missing`,
       );
     } catch (error) {
       blindCode = (error as { code?: string }).code ?? "error";
@@ -410,7 +399,7 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
   // completes the receipt, and the following repeat is a clean receipt replay.
   {
     const home = caseHome(context, "F08");
-    const { sidecar, faux, model } = await startSidecar(home, "receipt.before");
+    const { sidecar, faux, model } = await startSidecar(home, "appendOutcome.commit");
     await ensure(sidecar, model);
     try {
       await dispatch(sidecar, home, faux, "op-F08", context.outcomeScript);
@@ -481,20 +470,14 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
     });
     await ensure(sidecar, model);
     const inFlight = runDurableDispatch(
-      {
-        transport: clientFor(sidecar),
-        sink: createOutcomeSink({
-          scriptPath: context.outcomeScript,
-          env: { ...process.env, FM_HOME: home },
-        }),
-      },
+      { transport: clientFor(sidecar, context.outcomeScript) },
       { operationId: "op-F12", prompt: "p", payload: { task: "T1" } },
     ).then(
       () => "settled",
       (error) => (error as { code?: string }).code ?? "error",
     );
     await enteredPromise;
-    const duringRun = await clientFor(sidecar).cancel("op-F12", "foreground");
+    const duringRun = await clientFor(sidecar, context.outcomeScript).cancel("op-F12", "foreground");
     release();
     const runOutcome = await inFlight;
     const kinds = await observationKinds(sidecar, "op-F12");
@@ -532,7 +515,7 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
     } catch {
       /* settled, with no outcome commit yet */
     }
-    const settledCancel = await clientFor(settledSidecar.sidecar).cancel("op-F12b", "operation");
+    const settledCancel = await clientFor(settledSidecar.sidecar, context.outcomeScript).cancel("op-F12b", "operation");
     const settledRecord = await inspect(settledSidecar.sidecar, "op-F12b");
     await settledSidecar.sidecar.stop();
     const unresolvedRecord = settledRecord.ok
@@ -611,11 +594,11 @@ export async function runMatrix(context: CaseContext): Promise<MatrixCaseResult[
       ownerGeneration: 1,
       wakeClaimId: "claim-1",
       rowIds: ["row-T1"],
+      outcomeScript: context.outcomeScript,
     });
-    const sink = createOutcomeSink({ scriptPath: context.outcomeScript, env: { ...process.env, FM_HOME: home } });
     let code = "none";
     try {
-      await runDurableDispatch({ transport, sink }, { operationId: "op-F15", prompt: "p", payload: { changed: true } });
+      await runDurableDispatch({ transport }, { operationId: "op-F15", prompt: "p", payload: { changed: true } });
     } catch (error) {
       code = (error as { code?: string }).code ?? "error";
     }
