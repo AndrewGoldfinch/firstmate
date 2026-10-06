@@ -26,6 +26,8 @@ This pilot drives the genuinely live path instead:
 - Real components: the real `pi` binary, the real installed `@earendil-works/pi-coding-agent` version, the real `bin/fm-branch-outcome.sh` store, and the real extension loaded with `-e`.
 - Unread rows are seeded through the real store append path, standing in for a branch `fm_branch_report`.
 - One model and one network provider: the pilot submits a trivial prompt per session and spends real tokens, so its guard is `opt-in` and skipped unless `FM_PI_PHASE1_LIVE_SESSION=1` (or `FM_LIVE=1`).
+- Response content assertion: every live turn's response text must be non-empty and must contain the deterministic expected token the prompt asks for, so an empty-but-successful turn fails the guard instead of passing on the exit code alone.
+- Content negative control: the same assertion must reject a zero-exit empty response and a zero-exit mismatched response, and the run fails if either is accepted.
 - HOLD rule: any duplicate or loss on the pilot path fails the run and names the failing stage and raw state.
 
 ## Lab identity
@@ -151,3 +153,4 @@ FM_PI_PHASE1_LIVE_SESSION=1 bin/fm-test-run.sh tests/fm-pi-phase1-live-session.t
 ```
 
 `FM_PI_PHASE1_LIVE_MODEL` overrides the model and `FM_PI_PHASE1_LIVE_AGENT_DIR` overrides the Pi agent dir whose `auth.json` is symlinked into the disposable lab.
+The same probe runs the content negative control on its own, without tokens, when `FM_LIVE_CONTENT_CONTROL_ONLY=1` is set; it fails unless the assertion rejects both a zero-exit empty response and a zero-exit mismatched response.

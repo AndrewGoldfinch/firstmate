@@ -46,5 +46,7 @@ cat "$TMP_ROOT/output"
 [ "$status" -eq 0 ] || fail "Phase 1 live-session pilot failed against Pi $PI_VERSION (see output above)"
 grep -q 'PHASE1_LIVE_SESSION_COMPLETE verdict=PASS' "$TMP_ROOT/output" \
   || fail "Phase 1 live-session pilot did not report a passing verdict"
+grep -q 'live-session content-control rejected=empty-response,mismatched-response accepted=expected-response' "$TMP_ROOT/output" \
+  || fail "Phase 1 live-session pilot did not prove the turn content assertion rejects an empty or mismatched response"
 
-pass "real Pi SDK $PI_VERSION Phase 1 live session holds routine delivery, restart/resume, and an option-2 lock handover with exactly one durable delivery and no loss; the rollback reconciles a pending durable delivery before flag-off, and the unreconciled negative control reproduces the duplicate"
+pass "real Pi SDK $PI_VERSION Phase 1 live session asserts each live turn's response content and holds routine delivery, restart/resume, and an option-2 lock handover with exactly one durable delivery and no loss; the rollback reconciles a pending durable delivery before flag-off, the unreconciled negative control reproduces the duplicate, and the content control rejects an exit-0 empty or mismatched response"

@@ -46,7 +46,8 @@ const root = resolve(process.env.FM_LIVE_ROOT ?? process.cwd());
 const lab = resolve(process.env.FM_LIVE_LAB ?? join(process.cwd(), "fm-pi-phase1-live-lab"));
 const model = process.env.FM_LIVE_MODEL ?? "opencode-go/muse-spark-1.3-contributor";
 const agentSource = resolve(process.env.FM_LIVE_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent"));
-const prompt = process.env.FM_LIVE_PROMPT ?? "reply with exactly: OK";
+const expected = process.env.FM_LIVE_EXPECT ?? "FM_PHASE1_LIVE_OK";
+const prompt = process.env.FM_LIVE_PROMPT ?? `reply with exactly: ${expected}`;
 const piBin = process.env.PI_BIN ?? "pi";
 const outPath = process.env.FM_LIVE_OUTPUT ?? "";
 const extPath = join(root, ".pi/extensions/fm-branch-supervision.ts");
@@ -292,6 +293,47 @@ async function runToExit(handle, timeoutMs = 180000) {
   return result;
 }
 
+// Assert a live `pi` turn produced the expected model content, not merely a
+// zero exit code: an empty or unrelated answer still exits 0, so an
+// exit-code-only gate can pass without a real turn.
+function assertTurnContent(run, label, expect = expected) {
+  assert.equal(run.code, 0, `${label} failed: ${run.output}`);
+  const text = String(run.output ?? "");
+  assert.ok(text.trim().length > 0, `${label} produced an empty response (exit ${run.code})`);
+  assert.ok(
+    text.includes(expect),
+    `${label} response did not contain the expected content ${JSON.stringify(expect)}: ${JSON.stringify(text.trim())}`,
+  );
+}
+
+// Negative control: the content assertion, not the exit code, must gate each
+// turn. A zero-exit empty response and a zero-exit wrong response must both be
+// rejected, so an exit-code-only guard fails this control.
+function contentAssertionControl() {
+  const stub = (output) => ({ code: 0, signal: null, output });
+  const rejected = [];
+  for (const [name, bad] of [
+    ["empty-response", ""],
+    ["mismatched-response", "NOT_THE_EXPECTED_TOKEN"],
+  ]) {
+    assert.throws(
+      () => assertTurnContent(stub(bad), `control-${name}`, expected),
+      `content control ${name} was accepted; the guard passed on exit code alone`,
+    );
+    rejected.push(name);
+  }
+  assert.doesNotThrow(
+    () => assertTurnContent(stub(`  ${expected}\n`), "control-expected", expected),
+    "content control rejected the expected response",
+  );
+  report.contentControl = {
+    rejected,
+    accepted: "expected-response",
+    note: "exit-0 empty and mismatched responses fail the guard",
+  };
+  console.log(`live-session content-control rejected=${rejected.join(",")} accepted=expected-response`);
+}
+
 function record(report, stage, obs, extra = {}) {
   const entry = { stage, ...extra, ...obs };
   report.observations.push(entry);
@@ -339,7 +381,7 @@ async function pilotLane(base) {
   const seq1 = appendOutcome(ctx.home, "LIVE_PILOT_ONE", `fm:live:${base}:1`);
   const owner1 = startPi(ctx, { durable: true, label: "owner-1" });
   const run1 = await runToExit(owner1);
-  assert.equal(run1.code, 0, `owner-1 failed: ${run1.output}`);
+  assertTurnContent(run1, "owner-1");
   const obs1 = observe(ctx, ctx.home, ctx.sessionFile);
   record(report, "stage1-routine-delivery", obs1, { seq: seq1, piExit: run1.code });
   checkSettled("stage1", obs1, [seq1]);
@@ -349,7 +391,7 @@ async function pilotLane(base) {
   // Stage 2a: restart/resume; the acknowledged note is not re-delivered.
   const owner2a = startPi(ctx, { durable: true, label: "owner-2a" });
   const run2a = await runToExit(owner2a);
-  assert.equal(run2a.code, 0, `owner-2a failed: ${run2a.output}`);
+  assertTurnContent(run2a, "owner-2a");
   const obs2a = observe(ctx, ctx.home, ctx.sessionFile);
   record(report, "stage2-restart-acknowledged", obs2a, { piExit: run2a.code });
   checkSettled("stage2a", obs2a, [seq1]);
@@ -359,7 +401,7 @@ async function pilotLane(base) {
   const seq2 = appendOutcome(ctx.home, "LIVE_PILOT_TWO", `fm:live:${base}:2`);
   const owner2b = startPi(ctx, { durable: true, label: "owner-2b" });
   const run2b = await runToExit(owner2b);
-  assert.equal(run2b.code, 0, `owner-2b failed: ${run2b.output}`);
+  assertTurnContent(run2b, "owner-2b");
   const obs2b = observe(ctx, ctx.home, ctx.sessionFile);
   record(report, "stage2-unread-represented", obs2b, { seq: seq2, piExit: run2b.code });
   checkSettled("stage2b", obs2b, [seq1, seq2]);
@@ -382,14 +424,16 @@ async function pilotLane(base) {
 
   const successor = startPi(ctx, { durable: true, label: "successor" });
   const runSuccessor = await runToExit(successor);
-  assert.equal(runSuccessor.code, 0, `successor failed: ${runSuccessor.output}`);
+  assertTurnContent(runSuccessor, "successor");
   const obs3succ = observe(ctx, ctx.home, ctx.sessionFile);
   record(report, "stage3-handover-successor-adopts", obs3succ, { seq: seq3, piExit: runSuccessor.code });
   checkSettled("stage3-successor", obs3succ, [seq1, seq2, seq3]);
   if (obs3succ.durableEntries !== 3) hold("stage3", "successor appended a competing durable record", obs3succ);
 
   fs.writeFileSync(join(ctx.home, "release-mark-read"), "1");
-  const run3 = await runToExit(owner3);  const obs3final = observe(ctx, ctx.home, ctx.sessionFile);
+  const run3 = await runToExit(owner3);
+  assertTurnContent(run3, "owner-3");
+  const obs3final = observe(ctx, ctx.home, ctx.sessionFile);
   record(report, "stage3-replaced-owner-finishes", obs3final, { seq: seq3, piExit: run3.code });
   checkSettled("stage3-final", obs3final, [seq1, seq2, seq3]);
   if (obs3final.durableEntries !== 3) hold("stage3", "replaced owner appended a duplicate", obs3final);
@@ -411,7 +455,7 @@ async function pilotLane(base) {
   }
   releasePause(ctx);
   const run4 = await runToExit(owner4);
-  assert.equal(run4.code, 0, `owner-4 failed: ${run4.output}`);
+  assertTurnContent(run4, "owner-4");
   const rollbackReconciled = observe(ctx, ctx.home, ctx.sessionFile);
   record(report, "rollback-reconciled", rollbackReconciled, { seq: seq4, piExit: run4.code });
   checkSettled("rollback-reconciled", rollbackReconciled, [seq1, seq2, seq3, seq4]);
@@ -422,7 +466,7 @@ async function pilotLane(base) {
 
   const flagOwner = startPi(ctx, { durable: false, label: "flag-off" });
   const runFlag = await runToExit(flagOwner);
-  assert.equal(runFlag.code, 0, `flag-off owner failed: ${runFlag.output}`);
+  assertTurnContent(runFlag, "flag-off owner");
   const afterSwitch = observe(ctx, ctx.home, ctx.sessionFile);
   record(report, "rollback-flag-off-after-switch", afterSwitch, { piExit: runFlag.code });
   report.rollback.afterSwitch = {
@@ -454,7 +498,8 @@ async function rollbackNegativeLane(base) {
   await owner.done.catch(() => {});
   const orphaned = observe(ctx, ctx.home, ctx.sessionFile);
   const flagOwner = startPi(ctx, { durable: false, label: "negative-flag-off" });
-  await runToExit(flagOwner);
+  const runNegFlag = await runToExit(flagOwner);
+  assertTurnContent(runNegFlag, "negative-flag-off");
   const after = observe(ctx, ctx.home, ctx.sessionFile);
   const duplicateObserved = after.durableEntries >= 1 && after.plainEntries >= 1 && !after.unreadSeqs.includes(seq1);
   report.rollback.negativeControl = {
@@ -471,6 +516,13 @@ async function rollbackNegativeLane(base) {
 async function main() {
   const labs = [];
   try {
+    contentAssertionControl();
+    if (process.env.FM_LIVE_CONTENT_CONTROL_ONLY === "1") {
+      report.verdict = "PASS";
+      save();
+      console.log("PHASE1_LIVE_CONTENT_CONTROL verdict=PASS");
+      return;
+    }
     labs.push(await pilotLane(join(lab, "pilot")));
     labs.push(await rollbackNegativeLane(join(lab, "rollback-negative")));
     report.verdict = "PASS";
