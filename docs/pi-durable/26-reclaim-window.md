@@ -29,22 +29,22 @@ No duplicate and no loss is demonstrated.
 On the unmodified extension the successor reclaims and delivers exactly once (`diskRecords: 1`, `renderedCopies: 1`), and the resumed first reclaimer delivers nothing (`diskRecords: 1`, `renderedCopies: 0`): its `renameSync` fails with `ENOENT` because the successor's reconcile already reclaimed the first reclaimer's unpublished temp.
 The marker stays committed with one record, and the later adoption completes the cursor.
 
-## Why the window stays open
+## Why the window was open
 
 The duplicate is real if that incidental temp reclamation is removed.
 With `reclaimReadDeliveryMarkers` temporarily changed to skip non-integer names, the first reclaimer's temp survives, its `renameSync` clobbers the successor's marker, both owners append, and the probe fails `AssertionError: the reclaim window must not leave two durable records`.
 The reclamation is a ledger-wide garbage collection of abandoned atomic-write temps, not an exclusive-create fence, so the safety of the reported schedule rests on a side effect rather than on the reclaim mechanism.
-Reclaim still bypasses exclusive creation, and the guarantee is therefore scoped to the schedules the probe exercises rather than claimed unconditionally.
+Reclaim still bypassed exclusive creation, and the guarantee was therefore scoped to the schedules the probe exercises rather than claimed unconditionally; `27-reclaim-claim.md` later closes it with an exclusive-create claim.
 
 ## Fix decision
 
 No code change is made.
 The focused schedule does not demonstrate a duplicate or a loss, and the task's rule is to leave reclaim unchanged in that case.
-A structural close would replace the compare-then-rename publish with an exclusive-create claim (for example a per-sequence claim file created with `linkSync`, held only by the publisher, and reclaimed when its owner pid is dead) or serialize reclaim and append under a single winner; that is left for a separate task, with the counterfactual above as the evidence that the window is open.
+A structural close would replace the compare-then-rename publish with an exclusive-create claim (for example a per-sequence claim file created with `linkSync`, held only by the publisher, and reclaimed when its owner pid is dead) or serialize reclaim and append under a single winner; that was left for a separate task, with the counterfactual above as the evidence that the window was open, and `27-reclaim-claim.md` performs it.
 
 ## Corrected guarantee
 
-`docs/pi-durable/24-delivery-serialization.md` now scopes its exactly-once wording: the delivery path passes on the reported schedules, the reclaim compare-to-rename window is open in construction, and no unconditional exactly-once claim is made.
+`docs/pi-durable/24-delivery-serialization.md` scoped its exactly-once wording at this probe's time: the delivery path passes on the reported schedules, the reclaim compare-to-rename window was open in construction, and no unconditional exactly-once claim was made; `27-reclaim-claim.md` later closes the window with an exclusive-create claim.
 
 ## Verification
 
@@ -55,7 +55,7 @@ A structural close would replace the compare-then-rename publish with an exclusi
 
 ## Residual
 
-- The window is open in construction and closed only by the successor's temp reclamation on the reported schedule.
+- At this probe's time the window was open in construction and closed only by the successor's temp reclamation on the reported schedule; `27-reclaim-claim.md` later closes it with an exclusive-create claim.
 - A same-generation concurrent reclaim, two processes that both resolve the lock as owned, and a free-running multi-process reclaim with no lock change remain untested.
 - The committed reservation whose record lives only in a different destination still defers there, as docs 18 and 20 state.
 - This change does not promote the real path and does not complete the milestone; that decision stays with firstmate.
