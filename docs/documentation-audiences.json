@@ -497,6 +497,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/27-reclaim-claim.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
