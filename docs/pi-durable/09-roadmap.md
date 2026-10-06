@@ -11,8 +11,8 @@ Two layers, named apart from now on:
 | --- | --- |
 | Prototype 0 — Durable Outcome persistence | **Complete.** Claim proven; frozen; no further work on append dedup. |
 | Spike 1 — make real-path F09 reproducible | **Complete.** See [`development.md`](development.md) "Spike 1 — real-path F09 reproduction"; the real Pi reconcile path reproduces F09 headlessly (`tests/fm-pi-branch-extension.test.sh`). |
-| Prototype 1 — Durable Delivery boundary | **Loss/duplicate safety now structural (verified); option-2 stale-delivery relaxation stands.** Create and reclaim are both fenced by exclusive-create (`linkSync`), so the no-loss/no-duplicate guarantee no longer depends on a side effect; see [`27-reclaim-claim.md`](27-reclaim-claim.md) / [`28-reclaim-claim-verify.md`](28-reclaim-claim-verify.md). The "superseded owner cannot deliver" invariant is **not** met (option 2). |
-| Phase 1 adoption | **Captain decision.** Promotion requires accepting the option-2 stale-delivery relaxation with the recorded residuals; held as `pi-durable-phase1-final` (and `pi-durable-phase1-contract` / `pi-durable-phase1-promotion`). |
+| Prototype 1 — Durable Delivery boundary | **Complete.** Loss/duplicate safety is structural and verified (both create and reclaim fenced by exclusive-create); the option-2 stale-delivery relaxation is accepted. See [`27-reclaim-claim.md`](27-reclaim-claim.md) / [`28-reclaim-claim-verify.md`](28-reclaim-claim-verify.md). |
+| Phase 1 adoption | **Approved — bounded, opt-in Phase 1 pilot under option 2.** Validate real lock handover, normal session lifecycle, and a concurrent soak before broader adoption; the no-loss/no-duplicate claim is scoped to the verified schedules. |
 
 ## Prototype 1 — Durable Delivery boundary (resolved at an option-2 contract)
 
@@ -38,9 +38,9 @@ routine note delivered -> cursor write fails -> note stays unread -> re-present 
 
 If this cannot be driven headlessly, **stop and document why** rather than building around another reduced model. This retires the real-Pi-fidelity residual risk and is the precondition for Prototype 1.
 
-## Prototype 1 — Durable Delivery boundary (conditional)
+## Prototype 1 — Durable Delivery boundary (promotion criterion — met)
 
-Only if Spike 1 succeeds. Introduce **durable delivery identity** — something like `(outcomeSeq, destination/presentation target)` with a durable state transition — so the system knows a particular external delivery already happened independently of whether the read cursor advanced. Keep the proven append durability unchanged.
+Introduce **durable delivery identity** — something like `(outcomeSeq, destination/presentation target)` with a durable state transition — so the system knows a particular external delivery already happened independently of whether the read cursor advanced. Keep the proven append durability unchanged.
 
 Re-run the exact symmetric F09 experiment. Promotion criterion:
 
@@ -51,9 +51,16 @@ Re-run the exact symmetric F09 experiment. Promotion criterion:
 
 Then adversarially attack the new boundary: delivery started -> crash; delivery succeeds -> ack persistence fails; concurrent consumers; takeover; partial ledger recovery; ack-owner change.
 
-## Phase 1 gate
+## Phase 1 — bounded, opt-in pilot (approved)
 
-Advance only when the real Pi path demonstrates that a committed routine note is externally delivered **at most once** across the documented F09 failure window, while preserving at-least-once recovery and authority correctness. ("At most once" alone can be achieved by dropping messages; the target is exactly-once observable behavior for this delivery path, built from durable identity and recovery semantics.)
+The captain promoted Prototype 1 to a **bounded, opt-in Phase 1 pilot under option 2** on 2026-10-05, with the documented residuals accepted. Consolidates the former `pi-durable-phase1-final` / `pi-durable-phase1-contract` / `pi-durable-phase1-promotion` holds into one promotion decision.
+
+- Delivery stays opt-in (`FM_PI_DURABLE_DELIVERY`); the default flag-off path is unchanged.
+- **Option 2 stands:** an already-authorized in-flight delivery may finish and be adopted after takeover; the "superseded owner cannot deliver" invariant is **not** met.
+- The no-loss/no-duplicate claim is scoped to the verified schedules (the lab-interleaved F09 schedules in `28`), not to free-running multi-process reclaim.
+- Phase 1 must validate, before broader adoption: **real lock handover**, **normal session lifecycle**, and a **concurrent soak**.
+
+The former gate text: advance only when the real Pi path demonstrates that a committed routine note is externally delivered **at most once** across the documented F09 failure window, while preserving at-least-once recovery and authority correctness. ("At most once" alone can be achieved by dropping messages; the target is exactly-once observable behavior for this delivery path, built from durable identity and recovery semantics.) The bounded pilot measures this on the real path; broader adoption follows only on its evidence.
 
 ## Residual risk carried forward
 
