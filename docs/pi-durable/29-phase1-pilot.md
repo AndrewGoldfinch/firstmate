@@ -70,11 +70,13 @@ The comparison is required and enforced: the guard extracts the pre-Phase-1 exte
 
 `soak-concurrent` runs bounded cycles.
 Each cycle commits one note, launches three concurrent consumers on three destinations, stops the owner at an in-flight window, hands the lock to both other consumers in turn, returns the lock to the owner, resumes it, and then adopts on the owner's destination.
-The pause point alternates between after the durable append and before the record is written, and the handover order alternates, so both a committed reservation with its record on disk and a reservation with no record behind it are exercised.
+The pause point alternates on every cycle (after the durable append, then before the record is written) and the handover order alternates every two cycles, so all four pause-point x handover-order combinations are exercised within four cycles.
+The run records each combination it reaches and asserts every cell was reached, each with exactly one durable entry and no duplicate or loss.
 
 | Count | Value |
 | --- | --- |
 | Cycles requested / completed | 20 / 20 |
+| Pause-point x handover-order cells reached | 4 of 4 |
 | Durable records across all homes | 20 |
 | Externally visible deliveries | 20 |
 | Duplicates | 0 |
@@ -83,6 +85,7 @@ The pause point alternates between after the durable append and before the recor
 | Slowest cycle | 3.17 s |
 
 Every cycle settled with exactly one durable home-wide record per committed note, one visible delivery, cursor 1, unread 0, and no marker left behind.
+The run also asserts every one of the four pause-point x handover-order cells was reached and holds exactly one durable entry per completed cycle with no duplicate or loss.
 The duplicate check counts raw durable entries rather than deduplicated `seq:deliveryId` identities, so two records sharing a delivery identity are visible, and the run asserts one delivered entry per completed cycle and deduplicated records equal to raw entries.
 
 ## Regression suite
