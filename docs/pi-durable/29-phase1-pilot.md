@@ -12,7 +12,7 @@ The pilot does not start broader adoption, does not run a long soak, and keeps t
 - Isolated lab: every home, session file, lock, outcome store, and process lives under `$TMPDIR`, never the running home.
 - Real components: the real supervision extension, the real installed `@earendil-works/pi-coding-agent` SDK, the real headless transcript renderer, and the real `bin/fm-branch-outcome.sh` store.
 - No model and no network: the SDK is driven through synthetic lifecycle triggers (`session.bindExtensions`, a `turn_end` emit) and `fetch` throws.
-- Deterministic faults: in-flight windows use real `SIGSTOP`, and crashes use real `SIGKILL`.
+- Deterministic faults: in-flight windows and the reclaim claim boundary use real `SIGSTOP`, and crashes use real `SIGKILL`.
 - Real lock protocol: `state/.lock` names a live anchor process, each consumer extension process is a descendant of its own anchor, and ownership is decided by the extension's real `ps`-walked ancestry (`lockOwnership`/`lockOwnershipSync`).
 - Bounded soak: a fixed cycle count (default 20) and a wall-clock cap (480 s), whichever ends first.
 - HOLD rule: any duplicate or loss fails the run and names the failing schedule rather than smoothing it over.
@@ -42,8 +42,8 @@ A later session on the winner's destination adopts the one committed record and 
 | handover-in-flight | replaced-owner-finishes-delivery | no | 0 | 1 | 1 | committed |
 | handover-in-flight | adoption-completes-cursor | yes | 1 | 0 | 1 | cleared |
 
-Schedules reached: handover after the durable append and before the commit; handover with the reservation committed and the record not yet written; ownership in both directions of a lock handover.
-Schedules not reached: a handover during a free-running multi-process reclaim with no lock change, and a same-generation reclaim where two processes both resolve the lock as owned.
+Schedules reached: handover after the durable append and before the commit; handover with the reservation committed and the record not yet written; ownership in both directions of a lock handover; two live processes that resolve the same unchanged lock as owned and both attempt one stale reservation's reclaim claim.
+Schedules not reached: none beyond the platform limits recorded under Residuals.
 
 ## Validation 2: normal session lifecycle
 
@@ -81,26 +81,52 @@ The run records each combination it reaches and asserts every cell was reached, 
 | Externally visible deliveries | 20 |
 | Duplicates | 0 |
 | Losses | 0 |
-| Soak wall clock | 60.7 s |
-| Slowest cycle | 3.17 s |
+| Soak wall clock | 66.7 s |
+| Slowest cycle | 3.49 s |
 
 Every cycle settled with exactly one durable home-wide record per committed note, one visible delivery, cursor 1, unread 0, and no marker left behind.
 The run also asserts every one of the four pause-point x handover-order cells was reached and holds exactly one durable entry per completed cycle with no duplicate or loss.
 The duplicate check counts raw durable entries rather than deduplicated `seq:deliveryId` identities, so two records sharing a delivery identity are visible, and the run asserts one delivered entry per completed cycle and deduplicated records equal to raw entries.
 
+## Validation 4: reclaim claim with no lock change
+
+`reclaim-same-generation` and `reclaim-free-running` close the two reclaim schedules that docs 26-28 left open: a same-generation reclaim where two live processes both resolve the lock as owned, and a free-running multi-process reclaim with no lock change.
+Both seed a reclaimable reservation with the real extension: a live owner is stopped before its durable append with a real `SIGSTOP` and killed with a real `SIGKILL`, so its `reserved` marker names a dead owner and no durable record exists.
+The unchanged `state/.lock` then names the live controller, a shared ancestor of both consumers, so both consumers' real `ps`-walk resolves the same lock pid as owned with no handover.
+
+`reclaim-same-generation` starts the first lock owner, stops it holding the exclusive `<seq>.claim` link and before its publish, then starts the second lock owner.
+The second owner runs the same reclaim, loses the `linkSync` claim, and appends nothing; the resumed first owner publishes the one durable record and one visible delivery, which a later session adopts and completes the cursor.
+
+`reclaim-free-running` starts both lock owners together every round, so whichever wins the claim holds it while the other runs its full reclaim and loses.
+Each consumer records its pid when it reaches the claim, so a logged attempt is an owned attempt: a non-owner never reaches `reclaimReservation`.
+
+| Schedule | Stage | home records | visible deliveries | cursor | unread | marker |
+| --- | --- | --- | --- | --- | --- | --- |
+| reclaim-same-generation | first-reclaimer-holds-claim | 0 | 0 | 0 | 1 | reserved |
+| reclaim-same-generation | second-reclaimer-loses-claim | 0 | 0 | 0 | 1 | reserved |
+| reclaim-same-generation | claim-holder-publishes-once | 1 | 1 | 0 | 1 | committed |
+| reclaim-same-generation | adoption-after-claim-fence | 1 | 1 | 1 | 0 | cleared |
+| reclaim-free-running (4 rounds) | loser | 0 | 0 | 0 | 1 | reserved |
+| reclaim-free-running (4 rounds) | winner | 1 | 1 | 0 | 1 | committed |
+| reclaim-free-running (4 rounds) | adoption | 1 | 1 | 1 | 0 | cleared |
+
+Both schedules recorded both lock owners at the claim in every round and settled at exactly one durable home-wide record and one visible delivery.
+The free-running schedule therefore extends the no-loss/no-duplicate claim to the multi-process reclaim it previously scoped out, and the deterministic schedule is the boundary proof; the free-running invariant is exercised across a bounded round count, not every possible interleaving.
+The two schedules are distinct: `reclaim-same-generation` starts the second owner only after the first holds the claim, while `reclaim-free-running` starts both together and lets the winner be whichever process the scheduler grants the claim.
+
 ## Regression suite
 
-- `FM_PI_BRANCH_LIVE_E2E=1 bin/fm-test-run.sh tests/fm-pi-branch-live-e2e.test.sh` -> `exit=0`, `F09_PROBE_COMPLETE verdict=PASS`, 43.4 s.
-- `bin/fm-test-run.sh tests/fm-pi-branch-extension.test.sh` -> `exit=0`, 76.4 s.
+- `FM_PI_BRANCH_LIVE_E2E=1 bin/fm-test-run.sh tests/fm-pi-branch-live-e2e.test.sh` -> `exit=0`, `F09_PROBE_COMPLETE verdict=PASS`, 43.2 s.
+- `bin/fm-test-run.sh tests/fm-pi-branch-extension.test.sh` -> `exit=0`, 78.4 s.
 - `(cd runtime/pi-durable && npm ci && npm test)` -> 81 pass, 0 fail.
-- `FM_PI_PHASE1_PILOT=1 bin/fm-test-run.sh tests/fm-pi-phase1-pilot.test.sh` -> `exit=0`, `PHASE1_PROBE_COMPLETE verdict=PASS`, 73.1 s.
+- `FM_PI_PHASE1_PILOT=1 bin/fm-test-run.sh tests/fm-pi-phase1-pilot.test.sh` -> `exit=0`, `PHASE1_PROBE_COMPLETE verdict=PASS`, 110.8 s, including the two reclaim schedules above.
 
-Lab identity: Pi `1.0.4`, Node `v22.21.1`, `linux`, extension SHA-256 `cc9cac0c832acfc7cd565cd6bd978bac44e520e651ccc1f770191fe3bf024f09`, probe SHA-256 `f3151ea0bd5608282a575288c79d02f54d3b4dbcf7fe8d92f47ccfa19aaa66f5`.
+Lab identity: Pi `1.0.4`, Node `v22.21.1`, `linux`, extension SHA-256 `cc9cac0c832acfc7cd565cd6bd978bac44e520e651ccc1f770191fe3bf024f09`, probe SHA-256 `61e2420589b4c0684675a02f0b24cd787418df376a52a00246fe49e116bd1e10`.
 
 ## Residuals
 
 The option-2 contract still permits an already-authorized in-flight delivery to finish and be adopted after takeover, so the "a superseded owner cannot deliver" invariant is not met.
-The no-loss/no-duplicate claim stays scoped to the schedules exercised here and does not extend to free-running multi-process reclaim.
+The no-loss/no-duplicate claim stays scoped to the schedules exercised here, which now include the two reclaim schedules in Validation 4, but not to every possible interleaving or platform.
 A live-but-replaced owner that never exits still stalls its row until it does, which is a liveness cost rather than a loss.
 A committed reservation whose record lives only in a different destination defers there.
 An externally corrupted `.claim` stalls its sequence, which is unreachable through the extension's own writes.
@@ -114,4 +140,4 @@ FM_PI_PHASE1_PILOT=1 FM_PHASE1_CYCLES=50 FM_PHASE1_SOAK_SECONDS=300 bin/fm-test-
 FM_PI_PHASE1_OUTPUT=/tmp/phase1.json FM_PI_PHASE1_PILOT=1 bin/fm-test-run.sh tests/fm-pi-phase1-pilot.test.sh
 ```
 
-`FM_PHASE1_CYCLES` and `FM_PHASE1_SOAK_SECONDS` bound the soak; `FM_PHASE1_OUTPUT` retains the raw JSON observations, and `FM_PHASE1_BASELINE_PLUGIN` names the pre-Phase-1 extension used for the byte-for-byte comparison. The baseline is required: the guard extracts it and the probe fails closed when it is absent.
+`FM_PHASE1_CYCLES` and `FM_PHASE1_SOAK_SECONDS` bound the soak, and `FM_PHASE1_RECLAIM_ROUNDS` bounds the free-running reclaim rounds; `FM_PHASE1_OUTPUT` retains the raw JSON observations, and `FM_PHASE1_BASELINE_PLUGIN` names the pre-Phase-1 extension used for the byte-for-byte comparison. The baseline is required: the guard extracts it and the probe fails closed when it is absent.
