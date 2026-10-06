@@ -544,7 +544,7 @@ exec "$FM_PHASE1_BASH" "$@"
     const wallMs = Number(process.env.FM_PHASE1_SOAK_SECONDS ?? "480") * 1000;
     const started = Date.now();
     const soak = { cyclesRequested: cycles, wallLimitMs: wallMs, cyclesCompleted: 0, totalRecords: 0,
-      totalDeliveries: 0, duplicates: 0, losses: 0, maxCycleMs: 0, failures: [] };
+      totalDeliveries: 0, duplicates: 0, losses: 0, maxCycleMs: 0, cells: {}, failures: [] };
     for (let i = 0; i < cycles && Date.now() - started < wallMs; i += 1) {
       const cycleStart = Date.now();
       const home = setup(`soak-${i}`);
@@ -560,7 +560,12 @@ exec "$FM_PHASE1_BASH" "$@"
         // and one whose record is not yet written.
         const pausePoint = i % 2 === 0 ? "pause-after-write" : "pause-before-write";
         const stopMarker = pausePoint === "pause-after-write" ? "after-write" : "before-write";
-        const handoverOrder = i % 2 === 0 ? [second, third] : [third, second];
+        // Decouple the two axes: the pause point alternates every cycle and the
+        // handover order every two cycles, so all four pause-point x handover-order
+        // combinations run inside a bounded soak of four cycles.
+        const handoverForward = Math.floor(i / 2) % 2 === 0;
+        const handoverOrder = handoverForward ? [second, third] : [third, second];
+        const cell = `${pausePoint} x ${handoverForward ? "second-then-third" : "third-then-second"}`;
         grant(home, consumers[first]);
         await consumers[first].request(pausePoint);
         const blocked = consumers[first].request("start");
@@ -587,6 +592,10 @@ exec "$FM_PHASE1_BASH" "$@"
         if (observed.homeDeliveryEntries < 1) { soak.losses += 1; soak.failures.push(`cycle ${i}: no durable entry`); }
         soak.totalRecords += observed.homeRecords;
         soak.totalDeliveries += observed.homeDeliveryEntries;
+        const cellStats = (soak.cells[cell] ??= { cycles: 0, records: 0, deliveries: 0 });
+        cellStats.cycles += 1;
+        cellStats.records += observed.homeRecords;
+        cellStats.deliveries += observed.homeDeliveryEntries;
       } finally {
         await Promise.all(consumers.map((consumer) => end(consumer).catch(() => undefined)));
       }
@@ -611,7 +620,17 @@ exec "$FM_PHASE1_BASH" "$@"
       `deduplicated durable records must match raw entries (${soak.totalRecords} vs ${soak.totalDeliveries})`);
     assert.equal(soak.failures.length, 0, `soak found a duplicate or loss: ${soak.failures.join("; ")}`);
     assert.ok(soak.cyclesCompleted > 0, "the soak must complete at least one cycle");
-    report.schedulesReached.push(`soak-concurrent: ${soak.cyclesCompleted} bounded cycles, ${soak.totalRecords} records vs ${soak.totalDeliveries} deliveries`);
+    const cellsReached = Object.keys(soak.cells);
+    const cellsExpected = Math.min(soak.cyclesCompleted, 4);
+    assert.equal(cellsReached.length, cellsExpected,
+      `the soak must reach every pause-point x handover-order cell (${cellsReached.length} of ${cellsExpected} after ${soak.cyclesCompleted} cycles: ${cellsReached.join(", ") || "none"})`);
+    for (const [cellName, stats] of Object.entries(soak.cells)) {
+      assert.equal(stats.deliveries, stats.cycles,
+        `cell ${cellName} must hold exactly one durable entry per completed cycle (${stats.deliveries} vs ${stats.cycles})`);
+      assert.equal(stats.records, stats.deliveries,
+        `cell ${cellName} must not lose or duplicate durable records (${stats.records} vs ${stats.deliveries})`);
+    }
+    report.schedulesReached.push(`soak-concurrent: ${soak.cyclesCompleted} bounded cycles across ${cellsReached.length} pause-point x handover-order cells (${cellsReached.join(", ")}), ${soak.totalRecords} records vs ${soak.totalDeliveries} deliveries`);
   }
 
   try {
