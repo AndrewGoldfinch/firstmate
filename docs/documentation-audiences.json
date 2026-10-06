@@ -509,6 +509,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/30-phase1-pilot-verify.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
