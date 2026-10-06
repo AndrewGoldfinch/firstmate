@@ -493,6 +493,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/26-reclaim-window.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
