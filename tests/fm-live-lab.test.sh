@@ -727,6 +727,35 @@ out=$("$LIVE_LAB" down "$U" 2>&1)
 expect_code 0 "$?" "down removes the up-built lab: $out"
 pass "up re-registers primary trust after a concurrent Claude write"
 
+# --durable-delivery adds FM_PI_DURABLE_DELIVERY=1 to the primary launch only;
+# absent, the launched environment stays exactly as before.
+DURABLEBIN="$TMP_ROOT/durablebin"
+mkdir -p "$DURABLEBIN"
+cat > "$DURABLEBIN/pi" <<'SH'
+#!/usr/bin/env bash
+if [ "${FM_PI_DURABLE_DELIVERY:-}" = 1 ]; then
+  echo 'FM_PI_DURABLE_DELIVERY=1' > "$FM_HOME/../pi-durable-env"
+else
+  echo 'FM_PI_DURABLE_DELIVERY absent' > "$FM_HOME/../pi-durable-env"
+fi
+: > "$FM_HOME/state/.session-start-complete"
+exec sleep 45 >/dev/null 2>&1
+SH
+chmod +x "$DURABLEBIN/pi"
+DURABLE="$TMP_ROOT/durable-lab"
+out=$(SHELL=/bin/sh PATH="$DURABLEBIN:$PATH" "$LIVE_LAB" up --harness pi --durable-delivery --source "$UPSRC" --ref HEAD --timeout 0 "$DURABLE" 2>&1)
+expect_code 1 "$?" "the stand-in pi leaves the durable-delivery lab for inspection: $out"
+assert_equals 'FM_PI_DURABLE_DELIVERY=1' "$(cat "$DURABLE/pi-durable-env" 2>/dev/null)" "the primary launch carries FM_PI_DURABLE_DELIVERY=1"
+out=$("$LIVE_LAB" down "$DURABLE" 2>&1)
+expect_code 0 "$?" "down cleans the durable-delivery lab: $out"
+PLAIN="$TMP_ROOT/plain-lab"
+out=$(SHELL=/bin/sh PATH="$DURABLEBIN:$PATH" "$LIVE_LAB" up --harness pi --source "$UPSRC" --ref HEAD --timeout 0 "$PLAIN" 2>&1)
+expect_code 1 "$?" "the stand-in pi leaves the default lab for inspection: $out"
+assert_equals 'FM_PI_DURABLE_DELIVERY absent' "$(cat "$PLAIN/pi-durable-env" 2>/dev/null)" "the primary launch omits FM_PI_DURABLE_DELIVERY without the option"
+out=$("$LIVE_LAB" down "$PLAIN" 2>&1)
+expect_code 0 "$?" "down cleans the default lab: $out"
+pass "durable delivery reaches only the primary launch and stays off by default"
+
 # ---- fm-claude-trust.sh --lab-home -------------------------------------------
 
 T="$TMP_ROOT/trust"

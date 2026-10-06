@@ -9,7 +9,7 @@
 #                     [--model <m>] [--effort <e>]
 #                     [--supervision-host <line>|none|off] [--expect-host yes|no]
 #                     [--source <repo>] [--ref <rev>] [--timeout <seconds>]
-#                     [<lab-root>]
+#                     [--durable-delivery] [<lab-root>]
 #   fm-live-lab.sh check <lab-root>
 #   fm-live-lab.sh say <lab-root> [--window <name>] <text>
 #   fm-live-lab.sh pane <lab-root> [--window <name>] [--lines <n>]
@@ -69,6 +69,9 @@
 #                    (default openai-codex/gpt-6-luna, medium), launched
 #                    after the mate and worker so its first turn end arms
 #                    supervision. up then sends one harmless probe prompt.
+#                    --durable-delivery adds FM_PI_DURABLE_DELIVERY=1 to that
+#                    primary launch only, leaving today's environment byte-
+#                    identical when absent.
 #
 # Readiness checks (check prints "ok <name>: ..." or "fail <name>: ..."):
 #   primary       window main is alive, in the lab home, which is a primary
@@ -454,7 +457,7 @@ spawn_mate() {
 }
 
 cmd_up() {
-  local harness="" mate=no worker=no model="" effort=medium host_line=__default__ expect_host="" source="$BUILDER_ROOT" ref=HEAD timeout=600
+  local harness="" mate=no worker=no model="" effort=medium host_line=__default__ expect_host="" source="$BUILDER_ROOT" ref=HEAD timeout=600 durable_delivery=no
   local root=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -468,6 +471,7 @@ cmd_up() {
       --source) source=${2:-}; shift 2 ;;
       --ref) ref=${2:-}; shift 2 ;;
       --timeout) timeout=${2:-}; shift 2 ;;
+      --durable-delivery) durable_delivery=yes; shift ;;
       -h|--help) help_text; exit 0 ;;
       -*) die "unknown option '$1'" ;;
       *) [ -z "$root" ] || usage; root=$1; shift ;;
@@ -554,7 +558,8 @@ cmd_up() {
     echo "gate: $GATE (touch, then message the worker to resume)"
   fi
 
-  local -a primary=()
+  local -a primary=() primary_env=()
+  [ "$durable_delivery" != yes ] || primary_env=(FM_PI_DURABLE_DELIVERY=1)
   if [ "$harness" = claude ]; then
     local settle=$(( $(date +%s) + 300 )) retry
     until { [ "$mate" != yes ] || check_mate >/dev/null; } && { [ "$worker" != yes ] || [ -s "$LAB/state/$WORKER_ID.status" ]; }; do
@@ -572,7 +577,7 @@ cmd_up() {
     primary=(pi --approve --session-dir "$ROOT/pi-sessions" --model "$model" --thinking "$effort")
   fi
   lab_tmux new-window -d -t firstmate: -n main -c "$LAB" \
-    env FM_HOME="$LAB" CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false "${primary[@]}" \
+    env "${primary_env[@]}" FM_HOME="$LAB" CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false "${primary[@]}" \
     || die "cannot launch the lab primary"
   lab_tmux set-option -w -t "$(window_id main)" remain-on-exit on >/dev/null
   record_launch_pid "$(window_field main '#{pane_pid}')"
