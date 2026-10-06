@@ -2,7 +2,8 @@
 // Real extension, SDK, renderer and stores; no model calls. The controller
 // survives SIGKILL of each consumer and observes session JSONL independently,
 // and asserts one committed note yields exactly one home-wide delivery across
-// restart, destination replacement, and stale-owner takeover, with no loss.
+// restart, destination replacement, stale-owner takeover, and a reclaim
+// takeover between the ownership check and the publish, with no loss.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { fork, execFileSync } from "node:child_process";
@@ -56,6 +57,7 @@ async function worker() {
   // crashes inside the write so reconciliation must recover the note.
   const markerDir = join(home, "state/.branch-outcomes-delivered");
   let pauseBeforeMarkerWrite = false;
+  let pauseBeforeMarkerRename = false;
   let crashOnMarkerWrite = false;
   const writeFile = fs.writeFileSync;
   fs.writeFileSync = function (path, ...args) {
@@ -72,6 +74,17 @@ async function worker() {
       }
     }
     return writeFile(path, ...args);
+  };
+  // Reclaim publishes its replacement marker with a rename. Intercept the
+  // rename that targets the ledger so a scenario can force a takeover after
+  // reclaim's final ownership check and before its publish.
+  const rename = fs.renameSync;
+  fs.renameSync = function (from, to, ...args) {
+    if (pauseBeforeMarkerRename && typeof to === "string" && to.startsWith(markerDir)) {
+      pauseBeforeMarkerRename = false;
+      process.kill(process.pid, "SIGSTOP");
+    }
+    return rename(from, to, ...args);
   };
   syncBuiltinESMExports();
   globalThis.fetch = async () => { throw new Error("network is forbidden in the F09 probe"); };
@@ -116,6 +129,7 @@ async function worker() {
       else if (command === "pause-before-write") pauseBeforeWrite = true;
       else if (command === "pause-after-write") pauseAfterWrite = true;
       else if (command === "pause-before-marker-write") pauseBeforeMarkerWrite = true;
+      else if (command === "pause-before-marker-rename") pauseBeforeMarkerRename = true;
       else if (command === "crash-on-marker-write") crashOnMarkerWrite = true;
       else if (command === "converse") manager.appendMessage({ role: "user", content: "Local fixture conversation", timestamp: Date.now() });
       else assert.equal(command, "snapshot");
@@ -683,6 +697,58 @@ exec "$FM_F09_BASH" "$@"
       await kill(second);
     }
     {
+      const home = setup("reclaim-takeover-before-rename");
+      const markerDir = join(home, "state/.branch-outcomes-delivered");
+      fs.mkdirSync(markerDir, { recursive: true });
+      // A reservation left by a dead owner: reclaimable, and the row unread.
+      fs.writeFileSync(join(markerDir, "1"), JSON.stringify({
+        version: 2, status: "reserved", owner: "999999", generation: 1,
+        destination: join(home, "sessions", "main.jsonl"), deliveryId: "stale-owner-record",
+      }));
+      const first = await launch(home);
+      grant(home, first);
+      // Stop the first reclaimer after its final ownership check, immediately
+      // before it publishes its replacement marker.
+      await first.request("pause-before-marker-rename");
+      const blocked = first.request("start");
+      blocked.catch(() => {});
+      let stopped = false;
+      for (let i = 0; i < 300; i++) {
+        const status = execFileSync("ps", ["-o", "stat=", "-p", String(first.child.pid)], { encoding: "utf8" });
+        if (status.trim().startsWith("T")) { stopped = true; break; }
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      assert.ok(stopped, "the first reclaimer must stop between its ownership check and its publish");
+      // A successor takes the lock and reclaims the same stale reservation
+      // while the first reclaimer is stopped inside the compare-to-publish
+      // window. Only one of the two may publish, append, and render.
+      const second = await launch(home, { destination: "replacement" });
+      grant(home, second);
+      failAck(home);
+      const successor = observe(home, "successor-during-reclaim-window", await second.request("start"));
+      // The first reclaimer resumes into the window it was stopped in.
+      first.child.kill("SIGCONT");
+      const resumed = observe(home, "first-reclaimer-resumes-after-window", await blocked);
+      // One committed note is one home-wide delivery: across the window there
+      // must be exactly one durable record and exactly one visible delivery.
+      assert.equal(resumed.diskRecords, 1, "the reclaim window must not leave two durable records");
+      assert.equal(successor.renderedCopies + resumed.renderedCopies, 1,
+        "the reclaim window must not render two deliveries");
+      const settledMarker = JSON.parse(fs.readFileSync(join(markerDir, "1"), "utf8"));
+      assert.equal(settledMarker.status, "committed");
+      await kill(first);
+      await kill(second);
+      // A concurrent adoption on the winning destination must adopt the one
+      // committed record and clear the marker without resurrecting a sibling.
+      const third = await launch(home, { destination: "replacement" });
+      grant(home, third);
+      const settled = observe(home, "adopt-and-cleanup-after-window", await third.request("start"));
+      assert.equal(settled.diskRecords, 1, "adoption must leave exactly one durable record");
+      assert.equal(settled.unread, 0);
+      assert.equal(settled.deliveryMarkers, 0);
+      await kill(third);
+    }
+    {
       const home = setup("marker-write-crash");
       const first = await launch(home);
       grant(home, first);
@@ -704,7 +770,7 @@ exec "$FM_F09_BASH" "$@"
     report.verdict = "PASS";
     save();
     for (const row of observations.filter((row) => row.scenario)) console.log(JSON.stringify(row));
-    console.log("F09_PROBE_COMPLETE verdict=PASS; one committed note is one home-wide delivery across restart, destination replacement, stale-owner takeover, adoption before commit, a double-destination append race, an interleaved reclaim, and a marker-write crash");
+    console.log("F09_PROBE_COMPLETE verdict=PASS; one committed note is one home-wide delivery across restart, destination replacement, stale-owner takeover, adoption before commit, a double-destination append race, an interleaved reclaim, a reclaim takeover between the ownership check and the publish, and a marker-write crash");
   } catch (error) {
     report.verdict = "PROBE_FAILED";
     report.error = error.stack;
