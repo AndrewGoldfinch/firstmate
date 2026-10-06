@@ -517,6 +517,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/32-phase1-live-session-pilot.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
