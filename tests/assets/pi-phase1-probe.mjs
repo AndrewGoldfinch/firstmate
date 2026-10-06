@@ -505,16 +505,25 @@ exec "$FM_PHASE1_BASH" "$@"
       "the flag-off path must not create the durable ledger");
     report.defaultPresentation = { body, sha256: sha(body) };
     if (process.env.FM_PHASE1_BASELINE_PLUGIN && fs.existsSync(process.env.FM_PHASE1_BASELINE_PLUGIN)) {
+      let baseline = null;
       try {
-        const baseline = await captureDefaultPresentation(resolve(process.env.FM_PHASE1_BASELINE_PLUGIN), "lifecycle-default-baseline");
-        assert.equal(Buffer.from(baseline, "utf8").equals(Buffer.from(body, "utf8")), true,
-          "the flag-off body must be byte-identical to the pre-Phase-1 baseline extension");
-        report.baselineCompare = "identical";
-        report.baselinePresentation = { body: baseline, sha256: sha(baseline) };
+        // Only a genuine load/import failure of the baseline extension is
+        // tolerable here; the byte comparison below must fail the run.
+        baseline = await captureDefaultPresentation(resolve(process.env.FM_PHASE1_BASELINE_PLUGIN), "lifecycle-default-baseline");
       } catch (error) {
         report.baselineCompare = `unavailable: ${String(error.message).slice(0, 2000)}`;
         report.residuals.push("baseline-extension-compare: could not load the pre-Phase-1 extension in this lab");
       }
+      if (baseline !== null) {
+        assert.equal(Buffer.from(baseline, "utf8").equals(Buffer.from(body, "utf8")), true,
+          `the flag-off body must be byte-identical to the pre-Phase-1 baseline extension: ${JSON.stringify(baseline)}`);
+        report.baselineCompare = "identical";
+        report.baselinePresentation = { body: baseline, sha256: sha(baseline) };
+      }
+      // A provided baseline is enforced: neither a body mismatch nor a failure
+      // to load the baseline may be reported as a passing run.
+      assert.equal(report.baselineCompare, "identical",
+        `baseline comparison must be proven identical when a baseline is provided (baselineCompare=${report.baselineCompare})`);
     } else {
       report.baselineCompare = "not-provided";
     }
@@ -565,8 +574,11 @@ exec "$FM_PHASE1_BASH" "$@"
         await blocked;
         const observed = observe(home, `soak-cycle-${i}`, await consumers[first].request("snapshot"),
           { anchorPid: consumers[first].anchorPid });
-        if (observed.homeRecords > 1) { soak.duplicates += 1; soak.failures.push(`cycle ${i}: ${observed.homeRecords} durable records`); }
-        if (observed.homeRecords < 1) { soak.losses += 1; soak.failures.push(`cycle ${i}: no durable record`); }
+        // Count raw durable entries, not deduplicated seq:deliveryId identities,
+        // so two records sharing a delivery identity are visible rather than
+        // collapsing to one.
+        if (observed.homeDeliveryEntries > 1) { soak.duplicates += 1; soak.failures.push(`cycle ${i}: ${observed.homeDeliveryEntries} durable entries`); }
+        if (observed.homeDeliveryEntries < 1) { soak.losses += 1; soak.failures.push(`cycle ${i}: no durable entry`); }
         soak.totalRecords += observed.homeRecords;
         soak.totalDeliveries += observed.homeDeliveryEntries;
       } finally {
@@ -587,6 +599,10 @@ exec "$FM_PHASE1_BASH" "$@"
     }
     soak.elapsedMs = Date.now() - started;
     report.soak = soak;
+    assert.equal(soak.totalDeliveries, soak.cyclesCompleted,
+      `the soak must deliver exactly one durable entry per cycle (${soak.totalDeliveries} vs ${soak.cyclesCompleted})`);
+    assert.equal(soak.totalRecords, soak.totalDeliveries,
+      `deduplicated durable records must match raw entries (${soak.totalRecords} vs ${soak.totalDeliveries})`);
     assert.equal(soak.failures.length, 0, `soak found a duplicate or loss: ${soak.failures.join("; ")}`);
     assert.ok(soak.cyclesCompleted > 0, "the soak must complete at least one cycle");
     report.schedulesReached.push(`soak-concurrent: ${soak.cyclesCompleted} bounded cycles, ${soak.totalRecords} records vs ${soak.totalDeliveries} deliveries`);

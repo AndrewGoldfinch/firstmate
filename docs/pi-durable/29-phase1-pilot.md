@@ -64,6 +64,7 @@ The flag-off body is compared byte-for-byte against the pre-Phase-1 extension ex
 | Durable ledger on the flag-off path | absent |
 
 The baseline comparison is the byte-for-byte evidence: the pre-Phase-1 extension has no durable delivery at all, so an identical body proves the default presentation is unchanged.
+The comparison is enforced: a body mismatch, or a provided baseline that will not load, fails the run and names the mismatch rather than being recorded as a residual on a passing run, and the guard's negative control mutates the baseline body to prove the gate can fail.
 
 ## Validation 3: concurrent soak
 
@@ -82,6 +83,7 @@ The pause point alternates between after the durable append and before the recor
 | Slowest cycle | 3.17 s |
 
 Every cycle settled with exactly one durable home-wide record per committed note, one visible delivery, cursor 1, unread 0, and no marker left behind.
+The duplicate check counts raw durable entries rather than deduplicated `seq:deliveryId` identities, so two records sharing a delivery identity are visible, and the run asserts one delivered entry per completed cycle and deduplicated records equal to raw entries.
 
 ## Regression suite
 
