@@ -79,6 +79,27 @@ async function worker() {
       throw error;
     }
   };
+  // The reclaim publish is fenced by a per-sequence `<seq>.claim` hard link
+  // created with an exclusive `linkSync`. Intercept that call so a scenario can
+  // drive two live lock owners against the same reservation and stop the winner
+  // while it holds the claim and has not yet published. Every worker that
+  // reaches the claim appends its pid, which is how a run proves more than one
+  // live process resolved the unchanged lock as owned and attempted the reclaim.
+  let pauseAfterClaim = false;
+  const linkClaim = fs.linkSync;
+  fs.linkSync = function (from, to, ...args) {
+    if (typeof to === "string" && to.endsWith(".claim")) {
+      try { fs.appendFileSync(join(home, "claim-attempts.log"), `${process.pid}\n`); } catch { /* diagnostics only */ }
+      if (pauseAfterClaim) {
+        const result = linkClaim(from, to, ...args);
+        pauseAfterClaim = false;
+        fs.writeFileSync(join(home, "claim-held"), String(process.pid));
+        process.kill(process.pid, "SIGSTOP");
+        return result;
+      }
+    }
+    return linkClaim(from, to, ...args);
+  };
   syncBuiltinESMExports();
   globalThis.fetch = async () => { throw new Error("network is forbidden in the Phase 1 probe"); };
   const { DefaultResourceLoader, InteractiveMode, SessionManager, SettingsManager,
@@ -131,6 +152,7 @@ async function worker() {
         message: { role: "assistant", content: [] }, toolResults: [] });
       else if (command === "pause-before-write") pauseBeforeWrite = true;
       else if (command === "pause-after-write") pauseAfterWrite = true;
+      else if (command === "pause-after-claim") pauseAfterClaim = true;
       else if (command === "converse") manager.appendMessage({ role: "user", content: "Local fixture conversation", timestamp: Date.now() });
       else assert.equal(command, "snapshot");
       process.send({ id, snapshot: snapshot() });
@@ -232,6 +254,18 @@ exec "$FM_PHASE1_BASH" "$@"
     const file = join(home, "state/.lock");
     return fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8").trim()) : null;
   }
+  const claimAttempts = (home) => {
+    const file = join(home, "claim-attempts.log");
+    return fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
+  };
+  const durableDestinations = (home) => {
+    const dir = join(home, "sessions");
+    return fs.existsSync(dir)
+      ? fs.readdirSync(dir).filter((file) => file.endsWith(".jsonl"))
+        .filter((file) => readJsonl(join(dir, file)).some(isDurableNote))
+        .map((file) => file.replace(/\.jsonl$/, ""))
+      : [];
+  };
   function observe(home, stage, snapshot, extra = {}) {
     const markerState = marker(home);
     const record = { scenario: home.split("/").at(-1), stage, durable: extra.durable !== false, ...snapshot,
@@ -322,6 +356,9 @@ exec "$FM_PHASE1_BASH" "$@"
       } };
   }
   const grant = (home, consumer) => fs.writeFileSync(join(home, "state/.lock"), `${consumer.anchorPid}\n`);
+  // Both consumers descend from one live lock pid, so both resolve the same
+  // lock generation as owned with no handover.
+  const grantController = (home) => fs.writeFileSync(join(home, "state/.lock"), `${process.pid}\n`);
   const failAck = (home) => fs.writeFileSync(join(home, "fail-ack"), "1");
   async function end(consumer) {
     const exited = consumer.closed();
@@ -343,6 +380,161 @@ exec "$FM_PHASE1_BASH" "$@"
       await sleep(50);
     }
     return false;
+  }
+
+  // Seed a reclaimable reservation with the real extension: a live owner is
+  // stopped before its durable append, so it has created its `reserved` marker
+  // and written no record, then killed with a real SIGKILL. The stale marker
+  // names a dead owner and no durable record exists, which is exactly the state
+  // the reclaim path recovers.
+  async function seedStaleReservation(home, destination) {
+    const owner = await launch(home, { destination });
+    grant(home, owner);
+    await owner.request("pause-before-write");
+    const blocked = owner.request("start");
+    blocked.catch(() => undefined);
+    assert.ok(await waitForStop(owner, "before-write"), "the seeded owner must stop before its durable append");
+    const seeded = marker(home);
+    assert.equal(seeded?.parsed?.status, "reserved", "the seed must leave a reserved marker");
+    assert.equal(seeded?.parsed?.owner, String(owner.workerPid), "the seed marker must name the seeded owner");
+    process.kill(owner.workerPid, "SIGKILL");
+    await end(owner);
+    assert.equal(homeDurableIdentities(home).size, 0, "the seed must leave no durable record");
+    return { destination: owner.ready.sessionFile };
+  }
+
+  // Two live processes whose ancestry walk both resolve the SAME unchanged lock
+  // pid as owned, both attempting to reclaim one stale reservation. The first
+  // is stopped holding the exclusive `<seq>.claim` link and before its publish;
+  // the second, also a lock owner, must lose the claim and append nothing.
+  async function scheduleReclaimSameGeneration() {
+    const home = setup("reclaim-same-generation");
+    await seedStaleReservation(home, "main");
+    const first = await launch(home, { destination: "main" });
+    const second = await launch(home, { destination: "replacement" });
+    // No handover: the lock names the live controller, a shared ancestor of both
+    // consumers, so both resolve the lock as owned in the same generation.
+    grantController(home);
+    assert.equal(lockPid(home), process.pid, "the unchanged lock must name the shared ancestor");
+    await first.request("pause-after-claim");
+    const blocked = first.request("start");
+    blocked.catch(() => undefined);
+    assert.ok(await waitForStop(first, "claim-held"), "the first reclaimer must stop holding the exclusive claim");
+    const held = observe(home, "first-reclaimer-holds-claim", {
+      pid: first.workerPid, sessionFile: first.ready.sessionFile, memoryRecords: 0, renderedCopies: 0,
+      presentations: [], errors: [], ioErrors: [],
+    }, { anchorPid: first.anchorPid });
+    assert.equal(held.homeRecords, 0, "the claim holder must not have appended yet");
+    assert.equal(held.markerStatus, "reserved", "the stale reservation is still reserved under the claim");
+    assert.ok(fs.existsSync(join(home, "state/.branch-outcomes-delivered/1.claim")),
+      "the exclusive claim must exist while it is held");
+    // The second lock owner runs the same reclaim and loses the exclusive link.
+    const loser = observe(home, "second-reclaimer-loses-claim", await second.request("start"), { anchorPid: second.anchorPid });
+    assert.equal(loser.homeRecords, 0, "a reclaimer that loses the claim must append nothing");
+    assert.equal(loser.renderedCopies, 0, "a reclaimer that loses the claim must render nothing");
+    assert.equal(loser.unread, 1);
+    const attempts = new Set(claimAttempts(home));
+    assert.ok(attempts.has(String(first.workerPid)), "the claim holder must have attempted the claim");
+    assert.ok(attempts.has(String(second.workerPid)), "the losing lock owner must have attempted the claim");
+    // Resume the winner with its acknowledgement denied once, so the committed
+    // marker is observable before a later session adopts and clears it.
+    failAck(home);
+    process.kill(first.workerPid, "SIGCONT");
+    const published = observe(home, "claim-holder-publishes-once", await blocked, { anchorPid: first.anchorPid });
+    assert.equal(published.homeRecords, 1, "the claim holder must publish exactly one home-wide record");
+    assert.equal(published.renderedCopies, 1, "the winner's delivery must be the one visible copy");
+    assert.equal(published.markerStatus, "committed");
+    assert.equal(published.markerCount, 1, "the claim must be renamed over the marker, never left behind");
+    await end(first); await end(second);
+    const adopt = await launch(home, { destination: "main" });
+    grantController(home);
+    const settled = observe(home, "adoption-after-claim-fence", await adopt.request("start"), { anchorPid: adopt.anchorPid });
+    assert.equal(settled.homeRecords, 1, "adoption must leave exactly one durable record");
+    assert.equal(settled.unread, 0, "the committed delivery must be adopted, never lost");
+    assert.equal(settled.cursor, 1);
+    assert.equal(settled.markerCount, 0, "adoption clears the marker");
+    await end(adopt);
+    report.schedulesReached.push("reclaim-same-generation: two live lock owners race the exclusive claim with no handover; exactly one record and one visible delivery");
+  }
+
+  // Whichever of two armed consumers takes the exclusive claim stops holding it;
+  // the other, also a live lock owner, runs its full reclaim and loses.
+  async function waitForClaimHolder(home, consumers) {
+    for (let i = 0; i < 300; i += 1) {
+      const file = join(home, "claim-held");
+      if (fs.existsSync(file)) {
+        const pid = fs.readFileSync(file, "utf8").trim();
+        const index = consumers.findIndex((consumer) => String(consumer.workerPid) === pid);
+        if (index >= 0) return index;
+      }
+      await sleep(50);
+    }
+    return -1;
+  }
+
+  // Two live lock owners start together and free-run the same reclaim with no
+  // lock handover. Both are stopped only at the exclusive claim, so whichever
+  // wins holds it while the other runs its reclaim and loses; the claim must
+  // settle every round at exactly one durable record and one visible delivery.
+  async function scheduleReclaimFreeRunning() {
+    const rounds = Math.min(Math.max(Number(process.env.FM_PHASE1_RECLAIM_ROUNDS ?? "4"), 2), 8);
+    const summary = { rounds, records: 0, deliveries: 0, duplicates: 0, losses: 0, concurrentRounds: 0 };
+    for (let i = 0; i < rounds; i += 1) {
+      const home = setup(`reclaim-free-running-${i}`);
+      await seedStaleReservation(home, "main");
+      const destinations = ["main", "replacement"];
+      const consumers = [];
+      for (const destination of destinations) consumers.push(await launch(home, { destination }));
+      grantController(home);
+      for (const consumer of consumers) await consumer.request("pause-after-claim");
+      // Free-running: both consumers start together and race the one claim.
+      const pending = consumers.map((consumer) => {
+        const promise = consumer.request("start");
+        promise.catch(() => undefined);
+        return promise;
+      });
+      const holder = await waitForClaimHolder(home, consumers);
+      assert.ok(holder >= 0, `free-running round ${i} must have one consumer stop holding the claim`);
+      const loserIndex = 1 - holder;
+      const loser = observe(home, `reclaim-free-running-${i}-loser`, await pending[loserIndex], { anchorPid: consumers[loserIndex].anchorPid });
+      assert.equal(loser.homeRecords, 0, `free-running round ${i} must not let the losing lock owner append`);
+      assert.equal(loser.renderedCopies, 0, `free-running round ${i} must not let the losing lock owner render`);
+      const attempts = new Set(claimAttempts(home));
+      assert.equal(attempts.size, 2, `free-running round ${i} must have both lock owners attempt the claim`);
+      summary.concurrentRounds += 1;
+      // Resume the winner with its acknowledgement denied once, so the committed
+      // marker is observable before a later session adopts and clears it.
+      failAck(home);
+      process.kill(consumers[holder].workerPid, "SIGCONT");
+      const observed = observe(home, `reclaim-free-running-${i}-winner`, await pending[holder], { anchorPid: consumers[holder].anchorPid });
+      const winners = durableDestinations(home);
+      if (observed.homeDeliveryEntries > 1) summary.duplicates += 1;
+      if (observed.homeDeliveryEntries < 1) summary.losses += 1;
+      if (winners.length > 1) summary.duplicates += 1;
+      if (winners.length === 0) summary.losses += 1;
+      summary.records += observed.homeRecords;
+      summary.deliveries += observed.homeDeliveryEntries;
+      assert.equal(observed.homeDeliveryEntries, 1,
+        `free-running round ${i} must leave exactly one durable entry (saw ${observed.homeDeliveryEntries})`);
+      assert.equal(observed.homeRecords, observed.homeDeliveryEntries,
+        `free-running round ${i} must not lose or duplicate a durable record`);
+      assert.equal(observed.renderedCopies, 1, `free-running round ${i} must render exactly one visible delivery`);
+      await Promise.all(consumers.map((consumer) => end(consumer).catch(() => undefined)));
+      const adopt = await launch(home, { destination: winners[0] });
+      grantController(home);
+      const settled = observe(home, `reclaim-free-running-${i}-adoption`, await adopt.request("start"), { anchorPid: adopt.anchorPid });
+      assert.equal(settled.homeRecords, 1);
+      assert.equal(settled.unread, 0, "the committed delivery must be adopted, never lost");
+      assert.equal(settled.cursor, 1);
+      assert.equal(settled.markerCount, 0);
+      await end(adopt);
+    }
+    report.reclaimFreeRunning = summary;
+    assert.equal(summary.duplicates, 0, `free-running reclaim must never duplicate (${summary.duplicates} rounds)`);
+    assert.equal(summary.losses, 0, `free-running reclaim must never lose (${summary.losses} rounds)`);
+    assert.equal(summary.records, summary.deliveries, "free-running reclaim must keep records equal to deliveries");
+    assert.equal(summary.concurrentRounds, rounds, "every free-running round must have both lock owners attempt the claim");
+    report.schedulesReached.push(`reclaim-free-running: ${rounds} rounds of two live lock owners free-running the same reclaim on one unchanged lock; both attempted the claim in every round, ${summary.records} records vs ${summary.deliveries} deliveries, no duplicate or loss`);
   }
 
   // -------------------------------------------------------------------------
@@ -638,17 +830,17 @@ exec "$FM_PHASE1_BASH" "$@"
     await scheduleHandoverInFlight();
     await scheduleLifecycleDurable();
     await scheduleLifecycleDefault();
+    await scheduleReclaimSameGeneration();
+    await scheduleReclaimFreeRunning();
     await scheduleSoak();
     report.schedulesNotReached = [
-      "free-running multi-process reclaim with no lock change (doc 27's own scoped limit)",
-      "same-generation concurrent reclaim where two processes both resolve the lock as owned",
       "filesystem without hard-link/atomic-rename support, cross-device marker directories, PID reuse, and non-Linux platforms",
     ];
     report.residuals.push(
       "a live-but-replaced owner that never exits still stalls its row until it does (liveness, not loss)",
       "a committed reservation whose record lives only in a different destination defers there",
       "an externally corrupted .claim stalls its sequence (liveness only; unreachable through the extension's own writes)",
-      "the no-loss/no-duplicate claim stays scoped to the schedules exercised here, not free-running multi-process reclaim",
+      "the free-running reclaim invariant is exercised across a bounded round count, not every possible interleaving",
     );
     report.verdict = "PASS";
     save();
