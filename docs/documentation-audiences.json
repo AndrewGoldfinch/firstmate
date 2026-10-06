@@ -513,6 +513,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/31-phase1-harness-verify.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },

@@ -507,8 +507,9 @@ exec "$FM_PHASE1_BASH" "$@"
     if (process.env.FM_PHASE1_BASELINE_PLUGIN && fs.existsSync(process.env.FM_PHASE1_BASELINE_PLUGIN)) {
       let baseline = null;
       try {
-        // Only a genuine load/import failure of the baseline extension is
-        // tolerable here; the byte comparison below must fail the run.
+        // Load only inside the try: the byte comparison and the identity
+        // assert below sit outside it, so a body mismatch fails the run, and an
+        // unloadable baseline is fatal rather than a passing residual.
         baseline = await captureDefaultPresentation(resolve(process.env.FM_PHASE1_BASELINE_PLUGIN), "lifecycle-default-baseline");
       } catch (error) {
         report.baselineCompare = `unavailable: ${String(error.message).slice(0, 2000)}`;
