@@ -14,9 +14,9 @@
 # count and a wall-clock cap) comparing durable home-wide records against
 # externally visible deliveries. Any duplicate or loss fails the guard.
 #
-# FM_PHASE1_BASELINE_PLUGIN additionally compares the flag-off presentation body
-# against the pre-Phase-1 extension when it loads. FM_PHASE1_OUTPUT retains the
-# probe's JSON observations outside the temp lab.
+# FM_PHASE1_BASELINE_PLUGIN names the pre-Phase-1 extension for the required
+# byte-for-byte comparison; a missing or unloadable baseline fails the run.
+# FM_PHASE1_OUTPUT retains the probe's JSON observations outside the temp lab.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -47,7 +47,7 @@ baseline_plugin="$repo/.pi/extensions/fm-branch-supervision-baseline.ts"
 if git -C "$ROOT" cat-file -e 1f3e7696:.pi/extensions/fm-branch-supervision.ts 2>/dev/null; then
   git -C "$ROOT" show 1f3e7696:.pi/extensions/fm-branch-supervision.ts > "$baseline_plugin"
 else
-  baseline_plugin=""
+  fail "the Phase 1 pilot requires the pre-Phase-1 baseline extension, but git could not extract 1f3e7696:.pi/extensions/fm-branch-supervision.ts"
 fi
 
 FM_PHASE1_LAB="$TMP_ROOT/lab" \
@@ -65,23 +65,39 @@ grep -q 'PHASE1_PROBE_COMPLETE verdict=PASS' "$TMP_ROOT/output" \
 # pre-Phase-1 extension must actually fail the run. Mutating the baseline's
 # rendered note body must produce a non-zero exit that names the mismatch; a
 # passing verdict here means the gate is being swallowed again.
-if [ -n "$baseline_plugin" ]; then
-  mutated_baseline="$repo/.pi/extensions/fm-branch-supervision-baseline-mutated.ts"
-  sed 's/const MERGE_NOTE_BOAT = "⛵";/const MERGE_NOTE_BOAT = "⛵MUTATED";/' "$baseline_plugin" > "$mutated_baseline"
-  cmp -s "$baseline_plugin" "$mutated_baseline" \
-    && fail "negative control could not mutate the pre-Phase-1 baseline body (expected MERGE_NOTE_BOAT in the baseline extension)"
-  FM_PHASE1_LAB="$TMP_ROOT/lab-negative" \
-    FM_PHASE1_PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" \
-    FM_PHASE1_BASELINE_PLUGIN="$mutated_baseline" \
-    FM_PHASE1_ROOT="$ROOT" PI_PACKAGE_DIR="$PI_PACKAGE_DIR" \
-    node "$ROOT/tests/assets/pi-phase1-probe.mjs" > "$TMP_ROOT/negative-output" 2>&1
-  negative_status=$?
-  if [ "$negative_status" -eq 0 ] || grep -q 'PHASE1_PROBE_COMPLETE verdict=PASS' "$TMP_ROOT/negative-output"; then
-    cat "$TMP_ROOT/negative-output"
-    fail "a mutated pre-Phase-1 baseline body did not fail the byte-for-byte gate (gate is not enforced)"
-  fi
-  grep -q 'byte-identical to the pre-Phase-1 baseline extension' "$TMP_ROOT/negative-output" \
-    || fail "the mutated-baseline failure did not name the baseline byte mismatch"
+mutated_baseline="$repo/.pi/extensions/fm-branch-supervision-baseline-mutated.ts"
+sed 's/const MERGE_NOTE_BOAT = "⛵";/const MERGE_NOTE_BOAT = "⛵MUTATED";/' "$baseline_plugin" > "$mutated_baseline"
+cmp -s "$baseline_plugin" "$mutated_baseline" \
+  && fail "negative control could not mutate the pre-Phase-1 baseline body (expected MERGE_NOTE_BOAT in the baseline extension)"
+FM_PHASE1_LAB="$TMP_ROOT/lab-negative" \
+  FM_PHASE1_PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" \
+  FM_PHASE1_BASELINE_PLUGIN="$mutated_baseline" \
+  FM_PHASE1_ROOT="$ROOT" PI_PACKAGE_DIR="$PI_PACKAGE_DIR" \
+  node "$ROOT/tests/assets/pi-phase1-probe.mjs" > "$TMP_ROOT/negative-output" 2>&1
+negative_status=$?
+if [ "$negative_status" -eq 0 ] || grep -q 'PHASE1_PROBE_COMPLETE verdict=PASS' "$TMP_ROOT/negative-output"; then
+  cat "$TMP_ROOT/negative-output"
+  fail "a mutated pre-Phase-1 baseline body did not fail the byte-for-byte gate (gate is not enforced)"
 fi
+grep -q 'byte-identical to the pre-Phase-1 baseline extension' "$TMP_ROOT/negative-output" \
+  || fail "the mutated-baseline failure did not name the baseline byte mismatch"
 
-pass "real Pi SDK $PI_VERSION Phase 1 pilot holds real lock handover, the normal lifecycle, and a bounded concurrent soak with one home-wide delivery and no loss; the byte-for-byte baseline gate fails on a mutated baseline"
+# Negative control: a missing baseline must fail the run rather than silently
+# skipping the byte-for-byte gate. The path is deliberately absent, and the
+# failure must name the missing baseline.
+missing_baseline="$repo/.pi/extensions/fm-branch-supervision-baseline-absent.ts"
+rm -f "$missing_baseline"
+FM_PHASE1_LAB="$TMP_ROOT/lab-missing" \
+  FM_PHASE1_PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" \
+  FM_PHASE1_BASELINE_PLUGIN="$missing_baseline" \
+  FM_PHASE1_ROOT="$ROOT" PI_PACKAGE_DIR="$PI_PACKAGE_DIR" \
+  node "$ROOT/tests/assets/pi-phase1-probe.mjs" > "$TMP_ROOT/missing-output" 2>&1
+missing_status=$?
+if [ "$missing_status" -eq 0 ] || grep -q 'PHASE1_PROBE_COMPLETE verdict=PASS' "$TMP_ROOT/missing-output"; then
+  cat "$TMP_ROOT/missing-output"
+  fail "a missing pre-Phase-1 baseline did not fail the byte-for-byte gate (gate is skipped)"
+fi
+grep -q 'pre-Phase-1 baseline extension is required' "$TMP_ROOT/missing-output" \
+  || fail "the missing-baseline failure did not name the missing baseline"
+
+pass "real Pi SDK $PI_VERSION Phase 1 pilot holds real lock handover, the normal lifecycle, and a bounded concurrent soak with one home-wide delivery and no loss; the byte-for-byte baseline gate fails on a mutated or missing baseline"

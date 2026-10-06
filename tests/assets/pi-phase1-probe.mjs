@@ -504,30 +504,35 @@ exec "$FM_PHASE1_BASH" "$@"
     assert.equal(fs.existsSync(join(home, "state/.branch-outcomes-delivered")), false,
       "the flag-off path must not create the durable ledger");
     report.defaultPresentation = { body, sha256: sha(body) };
-    if (process.env.FM_PHASE1_BASELINE_PLUGIN && fs.existsSync(process.env.FM_PHASE1_BASELINE_PLUGIN)) {
-      let baseline = null;
-      try {
-        // Load only inside the try: the byte comparison and the identity
-        // assert below sit outside it, so a body mismatch fails the run, and an
-        // unloadable baseline is fatal rather than a passing residual.
-        baseline = await captureDefaultPresentation(resolve(process.env.FM_PHASE1_BASELINE_PLUGIN), "lifecycle-default-baseline");
-      } catch (error) {
-        report.baselineCompare = `unavailable: ${String(error.message).slice(0, 2000)}`;
-        report.residuals.push("baseline-extension-compare: could not load the pre-Phase-1 extension in this lab");
-      }
-      if (baseline !== null) {
-        assert.equal(Buffer.from(baseline, "utf8").equals(Buffer.from(body, "utf8")), true,
-          `the flag-off body must be byte-identical to the pre-Phase-1 baseline extension: ${JSON.stringify(baseline)}`);
-        report.baselineCompare = "identical";
-        report.baselinePresentation = { body: baseline, sha256: sha(baseline) };
-      }
-      // A provided baseline is enforced: neither a body mismatch nor a failure
-      // to load the baseline may be reported as a passing run.
-      assert.equal(report.baselineCompare, "identical",
-        `baseline comparison must be proven identical when a baseline is provided (baselineCompare=${report.baselineCompare})`);
-    } else {
-      report.baselineCompare = "not-provided";
+    const baselinePath = process.env.FM_PHASE1_BASELINE_PLUGIN;
+    if (!baselinePath || !fs.existsSync(baselinePath)) {
+      // The byte-for-byte gate is required: a run that cannot compare against
+      // the pre-Phase-1 extension must fail rather than skip the comparison.
+      report.baselineCompare = "missing";
+      assert.fail(
+        `the pre-Phase-1 baseline extension is required for the byte-for-byte gate but was not found: FM_PHASE1_BASELINE_PLUGIN=${JSON.stringify(baselinePath ?? null)}`);
     }
+    let baseline = null;
+    try {
+      // Load only inside the try: the byte comparison and the identity assert
+      // below sit outside it, so a body mismatch fails the run, and an
+      // unloadable baseline is fatal rather than a passing residual.
+      baseline = await captureDefaultPresentation(resolve(baselinePath), "lifecycle-default-baseline");
+    } catch (error) {
+      report.baselineCompare = `unavailable: ${String(error.message).slice(0, 2000)}`;
+      report.residuals.push("baseline-extension-compare: could not load the pre-Phase-1 extension in this lab");
+    }
+    if (baseline !== null) {
+      assert.equal(Buffer.from(baseline, "utf8").equals(Buffer.from(body, "utf8")), true,
+        `the flag-off body must be byte-identical to the pre-Phase-1 baseline extension: ${JSON.stringify(baseline)}`);
+      report.baselineCompare = "identical";
+      report.baselinePresentation = { body: baseline, sha256: sha(baseline) };
+    }
+    // The baseline is required, so a passing verdict is impossible unless the
+    // comparison actually ran and proved identical: a missing, mismatched, or
+    // unloadable baseline all fail here.
+    assert.equal(report.baselineCompare, "identical",
+      `baseline comparison must be proven identical (baselineCompare=${report.baselineCompare})`);
     report.schedulesReached.push("lifecycle-default: flag-off body byte-identical to the legacy merge note");
   }
 

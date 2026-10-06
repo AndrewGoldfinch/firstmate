@@ -64,7 +64,7 @@ The flag-off body is compared byte-for-byte against the pre-Phase-1 extension ex
 | Durable ledger on the flag-off path | absent |
 
 The baseline comparison is the byte-for-byte evidence: the pre-Phase-1 extension has no durable delivery at all, so an identical body proves the default presentation is unchanged.
-The comparison is enforced: a body mismatch, or a provided baseline that will not load, fails the run and names the mismatch rather than being recorded as a residual on a passing run, and the guard's negative control mutates the baseline body to prove the gate can fail.
+The comparison is required and enforced: the guard extracts the pre-Phase-1 extension from `1f3e7696` and fails closed when it is missing, so a run cannot pass with the gate skipped. A body mismatch or a baseline that will not load fails the run and names the mismatch rather than being recorded as a residual on a passing run, and the guard's negative controls mutate the baseline body and remove the baseline to prove the gate can fail on both.
 
 ## Validation 3: concurrent soak
 
@@ -111,4 +111,4 @@ FM_PI_PHASE1_PILOT=1 FM_PHASE1_CYCLES=50 FM_PHASE1_SOAK_SECONDS=300 bin/fm-test-
 FM_PI_PHASE1_OUTPUT=/tmp/phase1.json FM_PI_PHASE1_PILOT=1 bin/fm-test-run.sh tests/fm-pi-phase1-pilot.test.sh
 ```
 
-`FM_PHASE1_CYCLES` and `FM_PHASE1_SOAK_SECONDS` bound the soak; `FM_PHASE1_OUTPUT` retains the raw JSON observations, and `FM_PHASE1_BASELINE_PLUGIN` overrides the baseline extension used for the byte-for-byte comparison.
+`FM_PHASE1_CYCLES` and `FM_PHASE1_SOAK_SECONDS` bound the soak; `FM_PHASE1_OUTPUT` retains the raw JSON observations, and `FM_PHASE1_BASELINE_PLUGIN` names the pre-Phase-1 extension used for the byte-for-byte comparison. The baseline is required: the guard extracts it and the probe fails closed when it is absent.
