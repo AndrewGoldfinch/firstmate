@@ -1132,6 +1132,10 @@ export default function (pi: ExtensionAPI) {
   }
 
   const deliveredMarkerPath = (seq: number): string => join(deliveredMarkerDir, String(seq));
+  // A per-sequence reclaim claim, created with an exclusive `linkSync` so
+  // exactly one reclaimer can hold it. It is never swept as an abandoned temp;
+  // only a claim whose recorded owner pid is dead is reclaimed.
+  const deliveryClaimPath = (seq: number): string => join(deliveredMarkerDir, `${seq}.claim`);
   // Presence is the exactly-once proof, sound because no rollback ever removes
   // a record the marker has committed. The marker also names the winning
   // deliveryId so a stale owner can tell its own committed record from a
@@ -1245,29 +1249,78 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  // Reclaim a stale owner's reservation under this generation. The exact stored
-  // content must still match, so a concurrent winner is never clobbered.
+  // Remove a reclaim claim whose recorded owner is gone, so a crashed
+  // reclaimer never strands the sequence. A claim whose owner is alive is left
+  // untouched: only the owner, or this dead-owner cleanup, removes a claim.
+  function removeDeadClaim(claimPath: string): void {
+    let claim: DeliveryReservation | null;
+    try {
+      claim = parseReservation(readFileSync(claimPath, "utf8").trim());
+    } catch {
+      return;
+    }
+    if (!claim || claim.owner === String(process.pid) || pidAlive(claim.owner)) return;
+    try {
+      rmSync(claimPath, { force: true });
+    } catch {
+      // Best effort; a claim that cannot be removed only defers a later owner.
+    }
+  }
+
+  // Reclaim a stale owner's reservation under this generation. The publish is
+  // fenced by a per-sequence claim file created with an exclusive `linkSync`:
+  // exactly one reclaimer can hold the claim, so a takeover cannot interleave
+  // between the compare and the publish. The claim file carries the replacement
+  // bytes and is renamed over the marker, so no separate temp is required and
+  // an abandoned-temp sweep cannot disarm the winner.
   function reclaimReservation(seq: number, stale: DeliveryReservation, deliveryId: string): boolean {
     const target = deliveredMarkerPath(seq);
+    const claimPath = deliveryClaimPath(seq);
     const replacement: DeliveryReservation = {
       version: 2, status: "reserved", owner: String(process.pid), generation,
       destination: currentMainSession?.getSessionFile() ?? "", deliveryId,
     };
     try {
-      // Compare first: only the exact stored bytes may be replaced, so a
-      // concurrent winner is never clobbered by bytes that no longer match.
-      if (readFileSync(target, "utf8").trim() !== serializeReservation(stale)) return false;
-      const temporaryPath = markerTempPath(target);
+      removeDeadClaim(claimPath);
+      const sourcePath = markerTempPath(target);
       try {
-        writeFileSync(temporaryPath, serializeReservation(replacement), { mode: 0o600 });
-        // Re-check the fence after the compare and before publishing: a
-        // takeover in that window aborts rather than overwriting the winner.
-        if (!generationOwnsLockSync(generation)) return false;
-        renameSync(temporaryPath, target);
+        writeFileSync(sourcePath, serializeReservation(replacement), { mode: 0o600 });
+        // Exclusive create: `linkSync` fails when the claim already exists, so
+        // exactly one reclaimer in the home proceeds past this point. This is a
+        // real fence, not a read-then-act: the winner is decided by the
+        // filesystem's atomic link, not by observing another owner's state.
+        try {
+          linkSync(sourcePath, claimPath);
+        } catch {
+          return false;
+        }
+        // The claim is now a durable hard link; drop our source link so a
+        // concurrent abandoned-temp sweep cannot disarm the winner.
+        rmSync(sourcePath, { force: true });
+        // Only the exact stored bytes may be replaced, so a winner that
+        // committed first is never clobbered by bytes that no longer match.
+        if (readFileSync(target, "utf8").trim() !== serializeReservation(stale)) {
+          rmSync(claimPath, { force: true });
+          return false;
+        }
+        // Re-check the fence before publishing: a takeover after the claim
+        // aborts rather than overwriting a winner.
+        if (!generationOwnsLockSync(generation)) {
+          rmSync(claimPath, { force: true });
+          return false;
+        }
+        renameSync(claimPath, target);
+        // Confirm our own reservation actually landed. If a dead-claim cleanup
+        // race let another reclaimer's claim be published under our rename, do
+        // not append against a marker that does not name our delivery.
+        if (readReservation(seq)?.deliveryId !== deliveryId) return false;
+        return true;
+      } catch {
+        rmSync(claimPath, { force: true });
+        return false;
       } finally {
-        rmSync(temporaryPath, { force: true });
+        rmSync(sourcePath, { force: true });
       }
-      return true;
     } catch {
       return false;
     }
@@ -1292,6 +1345,12 @@ export default function (pi: ExtensionAPI) {
       return;
     }
     for (const name of names) {
+      if (name.endsWith(".claim")) {
+        // A live claim is a reclaimer's exclusive fence; only a dead owner's
+        // claim is reclaimed, so a sweep never disarms a winner.
+        removeDeadClaim(join(deliveredMarkerDir, name));
+        continue;
+      }
       const seq = Number(name);
       if (!Number.isInteger(seq)) {
         // An abandoned atomic-write temp: its marker was never published, so

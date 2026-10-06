@@ -3,7 +3,7 @@
 Status: implemented on `experiment/pi-durable-delivery-serialization`.
 This corrects the hardening landed in `22-delivery-hardening.md` after `23-hardening-verify.md` found that its eager stale-owner release destroyed the only durable copy in a concurrent commit race.
 It closes the loss only: it does not start Phase 1, does not run a soak, and does not mark the real-path milestone complete.
-The delivery guarantee below is scoped to the schedules the real-SDK probe exercises; reclaim's compare-to-rename window is not closed by exclusive creation, as `26-reclaim-window.md` records.
+The delivery guarantee below is scoped to the schedules the real-SDK probe exercises; `27-reclaim-claim.md` later closed reclaim's compare-to-rename window with an exclusive-create claim.
 It keeps the proven reserve-before-append recovery, the atomic marker publication, the frozen Durable Outcome append mechanism (`runtime/pi-durable` and `bin/fm-branch-outcome.sh`), and the default (flag-off) presentation path unchanged.
 The real-SDK probe keeps its no-model, no-fetch discipline; every interleaving is forced with a real `SIGSTOP` or `SIGKILL`.
 
@@ -28,7 +28,7 @@ The serialization authority is the home-wide marker, not an ownership read.
 Exactly one owner in the home can therefore hold a reservation for a store sequence.
 Every delivery path for that sequence reads that marker first: a fresh owner reserves, a reclaiming owner replaces only the exact stored bytes, and a replacement that finds a live reservation it cannot reclaim defers without appending.
 A takeover changes only `state/.lock`; it never touches the marker.
-On the reported schedules no second owner appends a competing durable record for the same sequence, but that exactly-once property is scoped to those schedules: reclaim's compare-to-rename window is open in construction, as the next section and `26-reclaim-window.md` record.
+On the reported schedules no second owner appends a competing durable record for the same sequence, and `27-reclaim-claim.md` later closed the reclaim compare-to-rename window that the next section and `26-reclaim-window.md` record as open at this task's time.
 
 What the hardening left unsynchronized was the stale owner's **destructive** rollback, which read the marker and then deleted.
 With that removed, the delivery path performs no destructive mutation of a durable record, so a takeover cannot cause loss by interleaving with it.
@@ -39,7 +39,7 @@ Portable Node offers no compare-and-swap primitive on a file, and the takeover p
 The compare-to-rename window is bounded by the ownership re-check, not eliminated.
 A focused takeover probe (`reclaim-takeover-before-rename`) stops the first reclaimer after its final ownership check and before its publish, then lets a successor take the lock and reclaim the same reservation.
 No duplicate or loss results: the successor's reconcile reclaims the stopped reclaimer's unpublished temp before it publishes, so the first reclaimer's resume fails with `ENOENT` instead of clobbering the winner.
-That reclamation is a ledger-wide temp cleanup, not an exclusive-create fence, so the window stays open in construction and the guarantee is scoped to the reported schedules.
+That reclamation is a ledger-wide temp cleanup, not an exclusive-create fence, so at this task's time the window stayed open in construction and the guarantee was scoped to the reported schedules; `27-reclaim-claim.md` later replaced the publish with an exclusive-create claim.
 
 ## Contract change (option 2)
 
@@ -48,7 +48,7 @@ This task therefore records an explicit contract change:
 
 - An already-authorized in-flight delivery may finish and be adopted after takeover.
 - The original "a superseded owner cannot deliver" invariant is **not** met.
-- This change closes the loss only; it does **not** by itself close the reclaim proof gap.
+- This change closes the loss only; the reclaim proof gap it leaves is closed later by `27-reclaim-claim.md`.
 
 ## Probes
 
@@ -77,7 +77,7 @@ Failing first, extension reverted to `ba56c267` with the new probe kept:
 ## Residual
 
 - The "superseded owner cannot deliver" invariant is not met; an in-flight delivery may finish and be adopted after takeover, as the contract change above states.
-- Reclaim is not a true CAS: the compare-to-rename window is bounded by the ownership re-check and, on the reported schedule, by the successor's reclamation of the stopped reclaimer's temp; it is not closed by exclusive creation, so the guarantee stays scoped to the reported schedules.
+- At this task's time reclaim was not a true CAS: the compare-to-rename window was bounded by the ownership re-check and, on the reported schedule, by the successor's reclamation of the stopped reclaimer's temp; `27-reclaim-claim.md` later closed it with an exclusive-create claim.
 - A free-running multi-process reclaim with no lock change remains untested.
 - A committed reservation whose record lives only in a different destination still defers there, as docs 18 and 20 state.
 - A live-but-replaced owner that never exits still stalls its row until it does (liveness, not loss).

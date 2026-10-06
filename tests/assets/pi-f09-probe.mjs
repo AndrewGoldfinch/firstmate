@@ -59,6 +59,7 @@ async function worker() {
   let pauseBeforeMarkerWrite = false;
   let pauseBeforeMarkerRename = false;
   let crashOnMarkerWrite = false;
+  let keepMarkerTemps = false;
   const writeFile = fs.writeFileSync;
   fs.writeFileSync = function (path, ...args) {
     if (typeof path === "string" && path.startsWith(markerDir)) {
@@ -85,6 +86,17 @@ async function worker() {
       process.kill(process.pid, "SIGSTOP");
     }
     return rename(from, to, ...args);
+  };
+  // Remove the incidental temp reclamation from a scenario: when asked, refuse
+  // to delete an unpublished atomic-write temp so the reclaim window is
+  // exercised without the side effect that doc 26 showed can mask it.
+  const remove = fs.rmSync;
+  fs.rmSync = function (path, ...args) {
+    if (keepMarkerTemps && typeof path === "string" && path.startsWith(markerDir)
+      && !Number.isInteger(Number(path.slice(markerDir.length + 1)))) {
+      return undefined;
+    }
+    return remove(path, ...args);
   };
   syncBuiltinESMExports();
   globalThis.fetch = async () => { throw new Error("network is forbidden in the F09 probe"); };
@@ -131,6 +143,7 @@ async function worker() {
       else if (command === "pause-before-marker-write") pauseBeforeMarkerWrite = true;
       else if (command === "pause-before-marker-rename") pauseBeforeMarkerRename = true;
       else if (command === "crash-on-marker-write") crashOnMarkerWrite = true;
+      else if (command === "keep-marker-temps") keepMarkerTemps = true;
       else if (command === "converse") manager.appendMessage({ role: "user", content: "Local fixture conversation", timestamp: Date.now() });
       else assert.equal(command, "snapshot");
       process.send({ id, snapshot: snapshot() });
@@ -697,6 +710,56 @@ exec "$FM_F09_BASH" "$@"
       await kill(second);
     }
     {
+      // The same takeover, but with the successor's incidental reclamation of
+      // the first reclaimer's unpublished temp removed. Doc 26 showed that on
+      // the compare-then-rename publish the first reclaimer's surviving temp
+      // lets it clobber the successor and leave two durable records; the
+      // exclusive claim must settle at exactly one.
+      const home = setup("reclaim-takeover-without-temp-sweep");
+      const markerDir = join(home, "state/.branch-outcomes-delivered");
+      fs.mkdirSync(markerDir, { recursive: true });
+      fs.writeFileSync(join(markerDir, "1"), JSON.stringify({
+        version: 2, status: "reserved", owner: "999999", generation: 1,
+        destination: join(home, "sessions", "main.jsonl"), deliveryId: "stale-owner-record",
+      }));
+      const first = await launch(home);
+      grant(home, first);
+      await first.request("pause-before-marker-rename");
+      const blocked = first.request("start");
+      blocked.catch(() => {});
+      let stopped = false;
+      for (let i = 0; i < 300; i++) {
+        const status = execFileSync("ps", ["-o", "stat=", "-p", String(first.child.pid)], { encoding: "utf8" });
+        if (status.trim().startsWith("T")) { stopped = true; break; }
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      assert.ok(stopped, "the first reclaimer must stop between its ownership check and its publish");
+      const second = await launch(home, { destination: "replacement" });
+      grant(home, second);
+      // Do not sweep the stopped reclaimer's unpublished temp: the exclusive
+      // claim, not that side effect, must decide the single winner.
+      await second.request("keep-marker-temps");
+      const successor = observe(home, "successor-without-temp-sweep", await second.request("start"));
+      first.child.kill("SIGCONT");
+      const resumed = observe(home, "first-reclaimer-resumes-without-sweep", await blocked);
+      assert.equal(resumed.diskRecords, 1, "the reclaim window must not leave two durable records");
+      assert.equal(successor.renderedCopies + resumed.renderedCopies, 1,
+        "the reclaim window must not render two deliveries");
+      const settledMarker = JSON.parse(fs.readFileSync(join(markerDir, "1"), "utf8"));
+      assert.equal(settledMarker.status, "committed");
+      await kill(first);
+      await kill(second);
+      // The winner's destination adopts the one committed record and clears the
+      // marker and the abandoned temp.
+      const third = await launch(home, { destination: "main" });
+      grant(home, third);
+      const settled = observe(home, "adopt-and-cleanup-after-no-sweep", await third.request("start"));
+      assert.equal(settled.diskRecords, 1, "adoption must leave exactly one durable record");
+      assert.equal(settled.unread, 0);
+      assert.equal(settled.deliveryMarkers, 0);
+      await kill(third);
+    }
+    {
       const home = setup("reclaim-takeover-before-rename");
       const markerDir = join(home, "state/.branch-outcomes-delivered");
       fs.mkdirSync(markerDir, { recursive: true });
@@ -724,7 +787,6 @@ exec "$FM_F09_BASH" "$@"
       // window. Only one of the two may publish, append, and render.
       const second = await launch(home, { destination: "replacement" });
       grant(home, second);
-      failAck(home);
       const successor = observe(home, "successor-during-reclaim-window", await second.request("start"));
       // The first reclaimer resumes into the window it was stopped in.
       first.child.kill("SIGCONT");
@@ -738,9 +800,10 @@ exec "$FM_F09_BASH" "$@"
       assert.equal(settledMarker.status, "committed");
       await kill(first);
       await kill(second);
-      // A concurrent adoption on the winning destination must adopt the one
-      // committed record and clear the marker without resurrecting a sibling.
-      const third = await launch(home, { destination: "replacement" });
+      // The first reclaimer's in-flight delivery finishes after the takeover
+      // (the option-2 contract), so its destination wins; a later adoption
+      // there must adopt the one committed record and clear the marker.
+      const third = await launch(home, { destination: "main" });
       grant(home, third);
       const settled = observe(home, "adopt-and-cleanup-after-window", await third.request("start"));
       assert.equal(settled.diskRecords, 1, "adoption must leave exactly one durable record");
