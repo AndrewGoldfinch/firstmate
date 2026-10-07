@@ -10,6 +10,8 @@
 #                     [--supervision-host <line>|none|off] [--expect-host yes|no]
 #                     [--source <repo>] [--ref <rev>] [--timeout <seconds>]
 #                     [--durable-delivery] [<lab-root>]
+#   FM_WATCH_EXTENSION_LOG_KEEP_LINES, when exported, is passed to a Pi
+#   primary so the opt-in watcher diagnostic log is enabled for the lab only.
 #   fm-live-lab.sh check <lab-root>
 #   fm-live-lab.sh say <lab-root> [--window <name>] <text>
 #   fm-live-lab.sh pane <lab-root> [--window <name>] [--lines <n>]
@@ -560,6 +562,10 @@ cmd_up() {
 
   local -a primary=() primary_env=()
   [ "$durable_delivery" != yes ] || primary_env=(FM_PI_DURABLE_DELIVERY=1)
+  # Opt-in watcher diagnostics: pass the caller's bound into the primary only
+  # when it is set, so the default lab environment stays unchanged.
+  [ -z "${FM_WATCH_EXTENSION_LOG_KEEP_LINES:-}" ] \
+    || primary_env+=(FM_WATCH_EXTENSION_LOG_KEEP_LINES="$FM_WATCH_EXTENSION_LOG_KEEP_LINES")
   if [ "$harness" = claude ]; then
     local settle=$(( $(date +%s) + 300 )) retry
     until { [ "$mate" != yes ] || check_mate >/dev/null; } && { [ "$worker" != yes ] || [ -s "$LAB/state/$WORKER_ID.status" ]; }; do
