@@ -533,6 +533,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/36-attended-pilot-rerun.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
