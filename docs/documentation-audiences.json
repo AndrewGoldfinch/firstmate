@@ -525,6 +525,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/34-attended-fleet-pilot-run.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
