@@ -309,6 +309,43 @@ test_outcome_startup_replay_preserves_silence() {
   pass "routine task and fleet no-change outcomes stay stored and silent captain outcomes are refused"
 }
 
+test_outcome_startup_replay_is_durable_delivery_aware() {
+  local home replay
+  home="$TMP_ROOT/store-durable-replay-home"
+  mkdir -p "$home/state"
+
+  # Leading silent row, then a leading non-silent routine row.
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task fleet --verdict routine --summary 'silent fleet review, nothing changed' --silent true >/dev/null \
+    || fail "silent append failed"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task task-1 --verdict routine --summary 'leading visible routine' >/dev/null \
+    || fail "visible append failed"
+
+  # Durable delivery: the printed digest is a tool result, not the rendered
+  # entry the cursor tracks, so the non-silent row must stay unread for the
+  # extension's reconcileUnreadOutcomes to render. The leading silent row is
+  # still consumed here.
+  replay=$(FM_HOME="$home" FM_PI_DURABLE_DELIVERY=1 "$ROOT/bin/fm-branch-outcome.sh" startup-replay) \
+    || fail "durable startup replay failed"
+  assert_contains "$replay" "leading visible routine" "durable startup replay dropped the visible row from the digest"
+  assert_not_contains "$replay" "silent fleet review" "durable startup replay printed a silent row"
+  assert_contains "$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" unread)" \
+    "leading visible routine" "durable startup replay consumed a non-silent row"
+  [ ! -e "$home/state/.branch-outcomes-cursor" ] \
+    || [ "$(cat "$home/state/.branch-outcomes-cursor")" = 1 ] \
+    || fail "durable startup replay advanced the cursor past a non-silent row"
+
+  # Non-durable delivery is unchanged: the digest itself is the presentation,
+  # so the same row is consumed.
+  replay=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" startup-replay) \
+    || fail "non-durable startup replay failed"
+  assert_contains "$replay" "leading visible routine" "non-durable startup replay dropped the visible row"
+  [ -z "$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" unread)" ] \
+    || fail "non-durable startup replay did not mark the visible row read"
+  pass "startup-replay leaves a non-silent routine row unread under durable delivery and consumes it without the flag"
+}
+
 test_outcome_startup_replay_stops_at_captain_barrier() {
   local home replay unread
   home="$TMP_ROOT/store-captain-barrier-home"
@@ -1547,6 +1584,7 @@ test_outcome_tail_keeps_whole_newest_rows_within_its_byte_budget
 test_outcome_seed_tail_creates_only_an_absent_display_tail
 test_outcome_seed_tail_only_reads_bounded_suffix
 test_outcome_startup_replay_preserves_silence
+test_outcome_startup_replay_is_durable_delivery_aware
 test_outcome_startup_replay_stops_at_captain_barrier
 test_outcome_cursor_corruption_fails_closed
 test_cursor_advancement_refuses_ahead_processed_marker
