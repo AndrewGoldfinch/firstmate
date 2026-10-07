@@ -21,6 +21,10 @@
 #     by Pi as a routine merge note or sequence-keyed visible captain entry,
 #     emitted by Pi's locked session-start replay, silently consumed there
 #     because `silent` is true, or presented by the supervision-host drain.
+#     Under durable delivery the locked startup replay prints leading
+#     non-silent routine rows into the digest without advancing past them,
+#     because that digest is a tool result rather than the rendered entry;
+#     they stay unread for the branch's durable present.
 #     Records above the cursor are unread. A captain row advances only after
 #     Pi persists its matching visible entry or the host prints its drain
 #     section, so interrupted presentation can be retried.
@@ -129,6 +133,15 @@
 #     field is true, and mark those leading routine rows read. Stop before the
 #     first captain row because only Pi's sequence-keyed visible entry may
 #     acknowledge that row. Prints nothing when nothing replayable is unread.
+#     When durable delivery is in use (FM_PI_DURABLE_DELIVERY is truthy, the
+#     same signal the Pi branch extension gates on at load), the printed digest
+#     is only a tool result, so it must not claim the rendered-entry
+#     presentation the cursor tracks: startup-replay still prints the leading
+#     non-silent routine rows, but advances the cursor only through the leading
+#     silent rows and leaves every non-silent row unread for the extension's
+#     reconcileUnreadOutcomes to render and mark read. Without that signal the
+#     printed digest is the presentation and the cursor advances through the
+#     whole leading routine run as before.
 #     Run it only when the session holds the lock (fm-session-start.sh owns the
 #     call site).
 #   fm-branch-outcome.sh seed-tail
@@ -164,6 +177,18 @@ RECORDED_AGO_JQ='def recorded_ago: ([$now - .epoch, 0] | max) as $s
   | if $s < 3600 then "\($s / 60 | floor)m"
     elif $s < 172800 then "\($s / 3600 | floor)h"
     else "\($s / 86400 | floor)d" end;'
+
+# True when the Pi branch extension will deliver outcomes durably. The
+# extension enables durable delivery from this same env signal at module load
+# (matching /^(1|true|yes)$/i), so reading it here is order-independent: the
+# value is fixed at session launch and startup-replay does not race the
+# extension's activation.
+durable_delivery_in_use() {
+  case "${FM_PI_DURABLE_DELIVERY:-}" in
+    1 | [Tt][Rr][Uu][Ee] | [Yy][Ee][Ss]) return 0 ;;
+  esac
+  return 1
+}
 
 usage() {
   echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] [--operation-key <key>] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | startup-replay | seed-tail" >&2
@@ -793,7 +818,19 @@ case "$CMD" in
         printf 'BRANCH OUTCOMES (handled by the supervision branch, not yet seen by this session):\n'
         printf '%s\n' "$VISIBLE"
       fi
-      LAST=$(record_seq "$(printf '%s\n' "$REPLAYABLE" | tail -n 1)")
+      if durable_delivery_in_use; then
+        # The printed digest is a tool result under durable delivery, not the
+        # rendered entry the cursor tracks, so consume only the leading silent
+        # rows; every non-silent row stays unread for reconcileUnreadOutcomes.
+        LAST=$(printf '%s\n' "$REPLAYABLE" | jq -sc '
+          ([.[] | .silent == true] | index(false)) as $stop
+          | (if $stop == null then . else .[0:$stop] end)
+          | last
+          | if . == null then empty else .seq end
+        ')
+      else
+        LAST=$(record_seq "$(printf '%s\n' "$REPLAYABLE" | tail -n 1)")
+      fi
       if [ -n "$LAST" ] && ! advance_cursor "$LAST"; then
         fm_lock_release "$LOCK"
         exit 1
