@@ -23,3 +23,7 @@ The frozen append mechanism and `runtime/pi-durable/src/` are untouched, and the
 `tests/fm-branch-supervision.test.sh` gains `test_outcome_startup_replay_is_durable_delivery_aware`: a leading silent row and a leading non-silent routine row, with `FM_PI_DURABLE_DELIVERY=1`, leave the non-silent row unread and advance the cursor only through the silent row.
 On the pre-fix code that assertion fails with `durable startup replay consumed a non-silent row`; it passes after the fix.
 The companion non-durable half re-runs the same home without the flag and asserts the visible row is consumed, matching the existing startup-replay expectations.
+
+## Residual risk
+
+The fix depends on the extension actually running. If `FM_PI_DURABLE_DELIVERY` is truthy but the branch extension never activates (load failure, a non-Pi host, or a home that exports the flag without the extension), a leading non-silent routine row stays **unread indefinitely**: `startup-replay` no longer consumes it, and nothing else renders it. The row is not lost — the digest still prints it — but that digest is a tool result, not a qualifying rendered presentation. This is strictly better than the pre-fix behavior (which consumed the row with no rendered entry either) and is inherent to durable delivery, not introduced by this change; see `39-startup-replay-fix-verify.md` (challenge 4).
