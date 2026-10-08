@@ -1,6 +1,8 @@
 # Attended-fleet handover and rollback run
 
 Status: **returned for independent review. All three gates passed on the scored path.**
+
+Corrections per independent review (`41`, HOLD - EVIDENCE): the delivery gates (A/B/C) are confirmed from raw artifacts, but this report's §7 originally claimed no `watcher: FAILED` alarm — a **non-owner refusal was surfaced** by the released owner during the handover and is now stated correctly below; the §7 `.watcher-down` citation is corrected to the Stage B gap marker; and §2's environment columns are marked as launcher-set/behavioral (no raw `/proc/<pid>/environ` capture was retained). These are report-accuracy corrections; no implementation defect was reproduced and no code change is required for the gates.
 This is the run the staged setup (`data/pi-durable-attended-pilot-handover-setup/report.md`) asked for: one bounded, isolated attended-fleet run of the overlapping option-2 handover and the reconciled rollback, on the fix for the startup-replay interaction (`38`, verified in `39`).
 The earlier HOLD reports (`34`, `35`, `36`, `37`) stand untouched; this run supplies new evidence and replaces none of them.
 Broader adoption stays pending this run's independent review.
@@ -63,7 +65,8 @@ The shim was only ever present on the owner's `PATH`; the successor and the flag
 
 ## 2. Per-process readiness (every resumed or successor process)
 
-Every primary on the durable path was checked with `/proc/<pid>/environ` and the lock/extension markers, not only the first launch.
+Every primary on the durable path was checked at its lock/extension markers and by its resulting behavior, not only the first launch.
+The `FM_PI_DURABLE_DELIVERY` / `FM_WATCH_EXTENSION_LOG_KEEP_LINES` columns below are the values the launcher set, corroborated functionally (a durable entry vs a plain note); the raw `/proc/<pid>/environ` captures were not retained in the evidence bundle, so those literal values are assertions rather than reproduced artifacts (see `41`, finding 4).
 
 | Process | Role | pid | `FM_PI_DURABLE_DELIVERY` | `FM_WATCH_EXTENSION_LOG_KEEP_LINES` | `.pi-branch-extension-loaded` == `.lock` |
 | --- | --- | --- | --- | --- | --- |
@@ -195,8 +198,9 @@ Diagnostics were on for the whole run; `.watch-extension.log` was copied at each
 | 01:47:59 | `1537616` | `1538358` | flag-off primary restores a watcher, `confirmed` |
 
 Every restore logged `start=ok`; every confirm logged `result=confirmed`.
-`.watch-cycle-exits.log` shows the ordinary `TERM` / `arm-interrupted` and `actionable-*` defaults at each owner exit and re-arm; no `watcher: FAILED` alarm was recorded.
-A `.watcher-down` marker announced `handling:1516033.1791424061.7oRHWZ` during the Stage B handover gap, i.e. the gap was observed and handled, not silent.
+`.watch-cycle-exits.log` shows the ordinary `TERM` / `arm-interrupted` and `actionable-*` defaults at each owner exit and re-arm.
+A `watcher: FAILED` alarm **was** surfaced by the released owner when it lost the lock to the successor (`01:45:54.055Z`): "Pi extension cannot restore continuity because this session no longer owns the lock" / "watcher cycle exited 143 without an actionable reason". That is the expected **non-owner refusal** under the documented lost-lock contract, not an outage; the successor's own continuity was separately confirmed (`restore 1515119 -> 1516033`, `result=confirmed`).
+The Stage B handover gap was observed and handled: the gap snapshot `B-inflight-state/.watcher-down` is `pending:handling:1466909.1791423845.FE13Yl`, `acked:handling:1466909.1791423845.FE13Yl` at `B-complete` (the end-of-run `announced:handling:1516033…` marker in `final/` is a later episode, not the Stage B gap).
 The planned restart downtime (Stage A) was the owner down `01:35:21 -> 01:35:50`; the successor watcher came up with the resumed primary.
 
 ## 8. What was not exercised
