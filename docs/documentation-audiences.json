@@ -577,6 +577,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/47-durable-mode-verify.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },

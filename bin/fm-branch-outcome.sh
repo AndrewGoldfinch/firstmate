@@ -142,8 +142,10 @@
 #     field is true, and mark those leading routine rows read. Stop before the
 #     first captain row because only Pi's sequence-keyed visible entry may
 #     acknowledge that row. Prints nothing when nothing replayable is unread.
-#     When durable delivery is in use (FM_PI_DURABLE_DELIVERY is truthy, the
-#     same signal the Pi branch extension gates on at load), the printed digest
+#     When durable delivery is in use (the home's `state/.pi-durable-delivery`
+#     marker exists, or `FM_PI_DURABLE_DELIVERY` is truthy — the marker is
+#     authoritative and is the same selection the Pi branch extension gates on
+#     at load), the printed digest
 #     is only a tool result, so it must not claim the rendered-entry
 #     presentation the cursor tracks: startup-replay still prints the leading
 #     non-silent routine rows, but advances the cursor only through the leading
