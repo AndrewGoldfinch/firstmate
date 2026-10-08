@@ -63,5 +63,5 @@ The flagless seq 5 delivery is a separate confirmation of the fix.
 - `bin/fm-test-run.sh tests/fm-pi-branch-extension.test.sh` — pass, including the `marker` arm.
 - `(cd runtime/pi-durable && npm ci && npm test)` — 81 of 81 pass.
 - `bin/fm-lint.sh` — pass (ShellCheck 0.11.0, actionlint).
-- `FM_PI_BRANCH_LIVE_E2E=1 bin/fm-test-run.sh tests/fm-pi-branch-live-e2e.test.sh` — could not run in this environment: this host has no globally installed `@earendil-works/pi-coding-agent` with the nested dependency layout the opt-in live guard requires, so it fails with `Pi package absent`.
-  The same failure occurs with this change stashed, so it is an environment limitation, not a regression, and this change does not touch the live path.
+- `FM_PI_BRANCH_LIVE_E2E=1 bin/fm-test-run.sh tests/fm-pi-branch-live-e2e.test.sh` - could not reach a green run in this environment: this host has no globally installed `@earendil-works/pi-coding-agent` with the nested dependency layout the opt-in live guard requires, so it fails immediately with `Pi package absent`.
+  Pointing the guard at the installed release through a private dependency shim let it proceed, and it then failed with `timeout waiting for pinned watcher-owned main delivery`; the same failure occurs with this change stashed, so it is an environment or timing limitation, not a regression, and this change does not touch the live path.
