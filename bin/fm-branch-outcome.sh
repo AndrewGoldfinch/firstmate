@@ -73,6 +73,15 @@
 #     it from a bounded window of the store's newest complete rows when it is
 #     absent, so a home whose store predates it gains one at its next session
 #     start without scanning lifetime history.
+#   - Durable delivery marker: $STATE/.pi-durable-delivery records that this
+#     home delivers outcomes durably. It is authoritative: a marked home stays
+#     durable even when a caller's environment lacks FM_PI_DURABLE_DELIVERY, so
+#     a flagless or conflicting caller cannot silently downgrade it. The env
+#     flag still enables durable delivery in a home that was never marked, and
+#     a home with neither keeps the flag-off path exactly. durable-mode
+#     enable|disable|status owns the marker; disable refuses while rows are
+#     unread, so a home is reconciled before it switches back to the flag-off
+#     presentation.
 #   - Every mutation runs under $STATE/.branch-outcomes.lock so the branch
 #     extension and a concurrent session-start replay cannot interleave.
 #   - The store is written BEFORE the outcome is delivered to main
@@ -169,6 +178,10 @@ OUTCOME_INDEX_READY="$STATE/.branch-outcome-index-ready"
 OUTCOME_TAIL="$STATE/.branch-outcomes-tail.jsonl"
 OUTCOME_TAIL_ROWS=200
 OUTCOME_TAIL_MAX_BYTES=1048576
+# Home-level on-disk selection of durable delivery. Its presence is
+# authoritative (see durable_delivery_in_use and the header), and
+# `durable-mode enable|disable` owns it.
+DURABLE_MARKER="$STATE/.pi-durable-delivery"
 # The "recordedAgo" field present and unprocessed add to captain rows (see the
 # usage above).
 # Callers pass --argjson now "$(date +%s)".
@@ -179,11 +192,14 @@ RECORDED_AGO_JQ='def recorded_ago: ([$now - .epoch, 0] | max) as $s
     else "\($s / 86400 | floor)d" end;'
 
 # True when the Pi branch extension will deliver outcomes durably. The
-# extension enables durable delivery from this same env signal at module load
-# (matching /^(1|true|yes)$/i), so reading it here is order-independent: the
-# value is fixed at session launch and startup-replay does not race the
-# extension's activation.
+# home's on-disk marker is authoritative: a marked home stays durable even when
+# this process's environment lacks FM_PI_DURABLE_DELIVERY, so a flagless or
+# conflicting caller cannot silently downgrade it. The env flag (the same
+# signal the extension enables at module load, matching /^(1|true|yes)$/i)
+# still enables durable delivery in a home that was never marked, and a home
+# with neither keeps the flag-off path exactly.
 durable_delivery_in_use() {
+  [ -e "$DURABLE_MARKER" ] && return 0
   case "${FM_PI_DURABLE_DELIVERY:-}" in
     1 | [Tt][Rr][Uu][Ee] | [Yy][Ee][Ss]) return 0 ;;
   esac
@@ -191,7 +207,7 @@ durable_delivery_in_use() {
 }
 
 usage() {
-  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] [--operation-key <key>] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | startup-replay | seed-tail" >&2
+  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] [--operation-key <key>] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | durable-mode enable|disable|status | startup-replay | seed-tail" >&2
   exit 2
 }
 
@@ -527,6 +543,40 @@ CMD=${1:-}
 shift 2>/dev/null || true
 
 case "$CMD" in
+  durable-mode)
+    MODE=${1:-}
+    [ "$#" -eq 1 ] || usage
+    case "$MODE" in
+      enable)
+        mkdir -p -- "$STATE"
+        : > "$DURABLE_MARKER"
+        printf 'durable delivery enabled for %s\n' "$STATE"
+        ;;
+      disable)
+        # Reconcile-before-disable: refuse while any row is unread so the home
+        # cannot switch to the flag-off presentation with a delivery pending.
+        fm_lock_acquire_wait "$LOCK"
+        if [ -e "$DURABLE_MARKER" ]; then
+          if ! PENDING=$(print_unread); then
+            fm_lock_release "$LOCK"
+            exit 1
+          fi
+          if [ -n "$PENDING" ]; then
+            fm_lock_release "$LOCK"
+            echo "error: refusing to disable durable delivery while outcome rows remain unread; deliver or reconcile them first" >&2
+            exit 1
+          fi
+          rm -f -- "$DURABLE_MARKER"
+        fi
+        fm_lock_release "$LOCK"
+        printf 'durable delivery disabled for %s\n' "$STATE"
+        ;;
+      status)
+        if durable_delivery_in_use; then printf 'enabled\n'; else printf 'disabled\n'; fi
+        ;;
+      *) usage ;;
+    esac
+    ;;
   append)
     TASK=''
     VERDICT=''

@@ -346,6 +346,61 @@ test_outcome_startup_replay_is_durable_delivery_aware() {
   pass "startup-replay leaves a non-silent routine row unread under durable delivery and consumes it without the flag"
 }
 
+# The durable selection is a per-home on-disk fact, not a process env var: a
+# marked home must stay durable for a flagless (or conflicting) caller, and the
+# only way back to the flag-off path reconciles first.
+test_outcome_durable_mode_marker_is_authoritative_and_reconciled() {
+  local home replay out status
+  home="$TMP_ROOT/store-durable-marker-home"
+  mkdir -p "$home/state"
+
+  # A durable home is marked on disk; the caller's environment is irrelevant.
+  : > "$home/state/.pi-durable-delivery"
+
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task task-1 --verdict routine --summary 'leading visible routine' >/dev/null \
+    || fail "visible append failed"
+
+  # Flagless startup-replay must not consume the leading non-silent row.
+  replay=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" startup-replay) \
+    || fail "flagless durable startup replay failed"
+  assert_contains "$replay" "leading visible routine" "flagless durable startup replay dropped the visible row from the digest"
+  assert_contains "$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" unread)" "leading visible routine" \
+    "flagless startup replay consumed a non-silent row in a durable home"
+  [ ! -e "$home/state/.branch-outcomes-cursor" ] || [ "$(cat "$home/state/.branch-outcomes-cursor")" = 0 ] \
+    || fail "flagless startup replay advanced the cursor in a durable home"
+
+  # A caller that contradicts the marker cannot downgrade the home either.
+  FM_HOME="$home" FM_PI_DURABLE_DELIVERY=0 "$ROOT/bin/fm-branch-outcome.sh" startup-replay >/dev/null \
+    || fail "conflicting-flag durable startup replay failed"
+  assert_contains "$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" unread)" "leading visible routine" \
+    "a conflicting flag downgraded a durable home"
+
+  # Explicit disablement refuses while a row is unread; it reconciles first.
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" durable-mode disable 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "durable-mode disable cleared the marker with an unread row"
+  assert_contains "$out" "unread" "durable-mode disable lost its refusal diagnostic"
+  [ -e "$home/state/.pi-durable-delivery" ] || fail "durable-mode disable removed the marker despite an unread row"
+
+  # Settle the row, then the same command clears the marker.
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" mark-read --through 1 >/dev/null \
+    || fail "mark-read failed"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" durable-mode disable >/dev/null \
+    || fail "durable-mode disable failed after reconciliation"
+  [ ! -e "$home/state/.pi-durable-delivery" ] || fail "durable-mode disable left the marker in place"
+
+  # With the marker gone, the flag-off behavior returns exactly.
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task task-2 --verdict routine --summary 'post-disable routine' >/dev/null \
+    || fail "post-disable append failed"
+  replay=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" startup-replay) \
+    || fail "post-disable startup replay failed"
+  [ -z "$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" unread)" ] \
+    || fail "post-disable startup replay did not consume the routine row"
+  pass "a durable home is authoritative without the flag, resists a conflicting flag, and disables only after reconciliation"
+}
+
 test_outcome_startup_replay_stops_at_captain_barrier() {
   local home replay unread
   home="$TMP_ROOT/store-captain-barrier-home"
@@ -1585,6 +1640,7 @@ test_outcome_seed_tail_creates_only_an_absent_display_tail
 test_outcome_seed_tail_only_reads_bounded_suffix
 test_outcome_startup_replay_preserves_silence
 test_outcome_startup_replay_is_durable_delivery_aware
+test_outcome_durable_mode_marker_is_authoritative_and_reconciled
 test_outcome_startup_replay_stops_at_captain_barrier
 test_outcome_cursor_corruption_fails_closed
 test_cursor_advancement_refuses_ahead_processed_marker
