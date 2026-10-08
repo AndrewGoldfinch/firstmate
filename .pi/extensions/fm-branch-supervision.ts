@@ -167,10 +167,18 @@ const effortPinFile = join(config, "supervision-branch-effort");
 const durableBridgeCli =
   process.env.FM_SUPERVISION_BRIDGE_CLI || join(fmRoot, "runtime", "pi-durable", "src", "bridge-cli.ts");
 const durableSocketPath = join(state, "pi-durable", "sidecar.sock");
+// Home-level on-disk selection of durable delivery (bin/fm-branch-outcome.sh
+// `durable-mode` owns it). It is authoritative: a marked home stays durable
+// even when this process's environment lacks FM_PI_DURABLE_DELIVERY, so a
+// flagless or conflicting caller cannot silently downgrade it. The env flag
+// still enables durable delivery in a home that was never marked. Like the env
+// flag, the selection is fixed at module load for the life of the session.
+const durableMarkerFile = join(state, ".pi-durable-delivery");
 // Opt-in durable delivery identity for routine notes. Off keeps the pre-spike
 // presentation path exactly; on, a routine delivery is recognized on reload by
 // its own stored record instead of being re-sent after a failed cursor write.
-const durableDeliveryEnabled = /^(1|true|yes)$/i.test(process.env.FM_PI_DURABLE_DELIVERY ?? "");
+const durableDeliveryEnabled =
+  existsSync(durableMarkerFile) || /^(1|true|yes)$/i.test(process.env.FM_PI_DURABLE_DELIVERY ?? "");
 // Provider selection is immutable for the life of the session, matching the
 // "provider selection becomes immutable for each accepted operation" contract.
 let cachedExecutionProvider: ExecutionProvider | null = null;

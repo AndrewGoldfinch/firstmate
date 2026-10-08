@@ -5986,13 +5986,18 @@ fi
 exec "$FM_TEST_REAL_BASH" "$@"
 SH
   chmod +x "$fakebin/bash"
-  for arm in existing:2: durable:1:1; do
+  for arm in existing:2: durable:1:1 marker:1:; do
     local label expect flag home
     label=${arm%%:*}
     expect=$(printf '%s' "$arm" | cut -d: -f2)
     flag=$(printf '%s' "$arm" | cut -d: -f3)
     home="$TMP_ROOT/f09-durable-delivery-$label"
     mkdir -p "$home/state" "$home/config"
+    # The marker arm selects durable delivery from the home's on-disk marker
+    # alone, with no FM_PI_DURABLE_DELIVERY in the environment.
+    case "$label" in
+      marker) : > "$home/state/.pi-durable-delivery" ;;
+    esac
     PATH="$fakebin:$PATH" PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
       FM_TEST_REAL_BASH="$real_bash" FM_TEST_OUTCOME_SCRIPT="$ROOT/bin/fm-branch-outcome.sh" \
       FM_TEST_FAIL_ARM="$home/state/f09-durable-fail-arm" FM_TEST_EXPECT_COPIES="$expect" \
@@ -6051,7 +6056,7 @@ EOF
     out=$(cat "$TMP_ROOT/node-output")
     expect_code 0 "$status" "the $label arm must yield $expect routine deliveries: $out"
   done
-  pass "durable delivery identity makes a committed routine note exactly once while the existing path duplicates"
+  pass "durable delivery identity makes a committed routine note exactly once while the existing path duplicates, including from the home marker alone"
 }
 
 # Adversarial attack on the new boundary. Delivery succeeds but the ack never
