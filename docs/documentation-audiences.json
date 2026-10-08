@@ -561,6 +561,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/43-adoption-home-run.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
