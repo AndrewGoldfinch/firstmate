@@ -126,7 +126,7 @@ Across the whole run the store held four rows and the session files held exactly
 ### Method note (recorded because it changed an intermediate reading)
 
 An operator-invoked `bin/fm-branch-outcome.sh startup-replay` run from a shell **without** `FM_PI_DURABLE_DELIVERY` takes the flag-off path and consumes leading non-silent rows, because the consuming decision is the same environment signal the extension gates on.
-One observation row (`seq 3`) was consumed that way during this run before that was understood; the cursor's mtime for that advance (`06:09Z`) confirms it happened at the manual replay, not at any session start.
+**Two** observation rows (`seq 2` and `seq 3`) were consumed that way during this run before that was understood; the cursor's mtime for the advance (`06:09Z`) actually fits the `seq 2` advance, not the `seq 3` row this note originally named. `seq 2` was non-silent and is a real loss (see `45`); `seq 3` is the report-attributed artifact. The consuming path is a flag-off `bin/fm-branch-outcome.sh startup-replay` run from an operator shell without `FM_PI_DURABLE_DELIVERY`.
 That is an operator artifact of this run, not a product defect: the home's own session-start replay, running with the flag set, demonstrably printed seq 4 and left it unread for the branch to render.
 
 ## 6. Rollback procedure preserved (reconcile before switching back to flag-off)

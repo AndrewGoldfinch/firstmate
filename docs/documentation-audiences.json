@@ -569,6 +569,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/45-adoption-seq2.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
