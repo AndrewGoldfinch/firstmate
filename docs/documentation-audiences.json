@@ -557,6 +557,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/42-attended-handover-rollback-reverify.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },

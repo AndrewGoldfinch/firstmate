@@ -1,0 +1,35 @@
+# Independent re-verification - corrected `40` (attended handover + rollback run)
+
+Status: read-only re-verification of report `40` as corrected per review `41`. No new pilot run was performed; no repository file was modified (scratch commits not needed). The deliverable is this report only.
+
+## Scope and method
+
+- Target: `docs/pi-durable/40-attended-handover-rollback-run.md`, corrected version.
+- Corrector: `8bf32594` "docs(pi-durable): archive handover/rollback review; correct the watcher-section overclaim", which changes `40` (10 lines) and adds `docs/pi-durable/41-attended-handover-rollback-review.md`.
+- The corrected pair lives at `origin/experiment/pi-durable-supervision` tip `8bf32594`; the local branch `experiment/pi-durable-supervision` is still at the merge commit `3420e666`, whose `40` is the pre-correction text and which contains no `41`. The worktree's default-branch HEAD `1f3e7696` does not carry `docs/pi-durable/` at all. "As landed" was therefore read as the pushed tip `8bf32594`.
+- Raw evidence re-derived from `/tmp/fm-handover-evidence/` and `/tmp/fmneg.1zwG4v/`. The original lab home `/tmp/fmlab.ZE9kAg/` is gone; its session transcript survives inside the bundle at `final/pi-sessions/2026-10-08T01-32-18-516Z_01a11923-cad4-7548-b350-731ea6171a37.jsonl`.
+- Commands used are quoted inline with each finding.
+
+## Findings table
+
+| Point | Confirmed? | Evidence |
+| --- | --- | --- |
+| 1. Non-owner refusal is the expected exception because successor watcher coverage was demonstrated | Yes | `B-complete/state/.watch-extension.log:7-8`: `2026-10-08T01:45:21.460Z pid=1515119 restore ... start=ok` then `...01:45:21.791Z pid=1515119 confirm generation=1466909.1791423845.FE13Yl watcherPid=1516033 result=confirmed`. `watcher/.watch-cycle-exits.log:7-8`: `successor=started:1516033`, successor watcher `1516033` active `01:45:21 -> 01:47:41`. The `watcher: FAILED` at `01:45:54.055Z` falls inside that covered window. |
+| 2. Corrected §7 timeline and gap-marker citation match raw artifacts | Yes | `final/pi-sessions/...jsonl:56` timestamp `2026-10-08T01:45:54.055Z`, role `user`, wake text `watcher: FAILED - Pi extension cannot restore continuity because this session no longer owns the lock` / `watcher: FAILED - watcher cycle exited 143 without an actionable reason`; same two lines at `B-complete/pane-ownerB.txt:12-13`. Gap marker: `B-inflight-state/.watcher-down` = `pending:handling:1466909.1791423845.FE13Yl`; `B-complete/state/.watcher-down` = `acked:handling:1466909.1791423845.FE13Yl`; `final/state/.watcher-down` and `watcher/.watcher-down` = `announced:handling:1516033.1791424061.7oRHWZ` (later episode, as the correction states). |
+| 3. §2 environment provenance labelled and the `/proc` gap retained as a limitation | Yes | `40` line 68: the `FM_PI_DURABLE_DELIVERY` / `FM_WATCH_EXTENSION_LOG_KEEP_LINES` columns are "the values the launcher set, corroborated functionally ... the raw `/proc/<pid>/environ` captures were not retained in the evidence bundle, so those literal values are assertions rather than reproduced artifacts (see `41`, finding 4)." Bundle search confirms the limitation: `find /tmp/fm-handover-evidence -iname '*environ*' -o -iname '*.env'` returns only `./C-negative.env` (negative-lane), no per-process capture. |
+| 4. Verdict separates confirmed gates from watcher/evidence limitations | Yes | `40` line 3 keeps `Status: returned for independent review. All three gates passed on the scored path.`; line 5 states the corrections "per independent review (`41`, HOLD - EVIDENCE): the delivery gates (A/B/C) are confirmed from raw artifacts, but this report's §7 originally claimed no `watcher: FAILED` alarm — a non-owner refusal was surfaced ... and is now stated correctly ... and §2's environment columns are marked as launcher-set/behavioral ... no implementation defect was reproduced and no code change is required for the gates." §10 repeats gates met and points adoption at review. |
+| 5. "Not exercised" is scoped to this run and claims no attended-fleet coverage from earlier work | Yes | `40` §8 (lines 206-211) lists reserved-with-no-record sub-state, non-holding-destination refusal, fresh-destination deferral, forced `captain`-verdict row (noted `covered by 36` only for the harness-level processing half, "not re-exercised here"), and soak/second handover, each explicitly "in this run". Line 7 states "The earlier HOLD reports (`34`, `35`, `36`, `37`) stand untouched; this run supplies new evidence and replaces none of them." No sentence asserts that reservation-crash, fresh-destination, or soak results constitute attended-fleet coverage. |
+
+Invariant check (the correction's load-bearing claim): every `.watch-extension.log` restore logged `start=ok` and every confirm logged `result=confirmed` (`final/state/.watch-extension.log` has the full 10-line record: five restores/five confirms matching `40` §7's table). `watcher/.watch-cycle-exits.log` contains no `watcher: FAILED` line; its exits are the ordinary `exit_code=0 reason=actionable-*` and `exit_code=143 signal=TERM reason=arm-interrupted/signal-exit` records. The corrected §7 therefore no longer overclaims - it attributes the `FAILED` to the released owner's lost-lock refusal surfaced through the session wake, not to the exit log.
+
+## Explicit conclusion on the environment-provenance gap
+
+The gap is real and correctly retained: there is no raw `/proc/<pid>/environ` capture for any process, so the literal `FM_PI_DURABLE_DELIVERY` / `FM_WATCH_EXTENSION_LOG_KEEP_LINES` values in `40` §2 remain assertions.
+
+It does **not** block the trial. The three delivery gates (A restart presentation, B overlapping option-2 handover exactly-once, C reconciled rollback plus unreconciled negative control) re-derive from artifacts that do not depend on those environment values: the session transcript, the durable `branch-outcomes`/delivered-row records and cursor, the watcher extension and cycle-exit logs, the per-stage `.watcher-down` markers, and the pane captures. The flag values are corroborated functionally (durable entry vs plain note; `.pi-branch-extension-loaded == .lock` in every snapshot) rather than by a raw capture, which is precisely what `40` §2 now says and what `41` finding 4 accepted as only "partially confirmed". The environment provenance is a reproducibility limitation on two table columns, not a load-bearing input to any confirmed gate. No implementation defect was reproduced by `41`, and the corrected `40` adds no new implementation claim.
+
+## Provenance observation (not a blocker)
+
+The correction `8bf32594` is pushed on `origin/experiment/pi-durable-supervision` but is not on the local branch (`3420e666`) nor on default HEAD (`1f3e7696`); `41` already recorded that the verified revision is off the default branch, expected for a pilot branch. Reviewers should cite `8bf32594` when reading the corrected `40`/`41`.
+
+ADVANCE - environment-provenance gap is an accepted evidence limitation, not a blocker: no raw `/proc` capture is required to confirm the three delivery gates, and the corrected §7/§2 statements match the raw artifacts.
