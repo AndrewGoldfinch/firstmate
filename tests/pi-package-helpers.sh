@@ -54,3 +54,17 @@ fm_pi_dep_node_modules() {
     printf '%s\n' "$(dirname "$(dirname "$package_dir")")"
   fi
 }
+
+# fm_pi_require_usable <package_dir> refuses loudly when the package is present
+# but its sibling dependencies cannot be resolved, so a partial or broken
+# install names the missing dependency instead of silently skipping the test.
+fm_pi_require_usable() {
+  local package_dir=$1 deps
+  deps=$(fm_pi_dep_node_modules "$package_dir")
+  if [ -d "$deps/@earendil-works/pi-tui" ] && [ -d "$deps/@earendil-works/pi-ai" ] && [ -d "$deps/typebox" ]; then
+    return 0
+  fi
+  printf 'not ok - installed @earendil-works/pi-coding-agent at %s is missing sibling dependencies under %s (need pi-tui, pi-ai, typebox); set FM_PI_PACKAGE_DIR to a complete install\n' \
+    "$package_dir" "$deps" >&2
+  exit 1
+}

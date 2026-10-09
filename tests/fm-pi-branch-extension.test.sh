@@ -12,6 +12,9 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# shellcheck source=tests/pi-package-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/pi-package-helpers.sh"
+
 TMP_ROOT=$(fm_test_tmproot fm-pi-branch-extension)
 EXT="$ROOT/.pi/extensions/fm-branch-supervision.ts"
 export NODE_NO_WARNINGS=1
@@ -5090,17 +5093,19 @@ test_real_pi_picker_primitives_stay_bounded_and_searchable() {
     echo "skip: node not found for the Pi picker primitives test"
     return
   fi
-  local package_dir fixture original_dir out status
-  package_dir=${FM_PI_PACKAGE_DIR:-"$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
+  local package_dir deps fixture original_dir out status
+  package_dir=$(fm_pi_package_dir)
   if [ ! -f "$package_dir/package.json" ]; then
     echo "skip: installed @earendil-works/pi-coding-agent package not found"
     return
   fi
+  fm_pi_require_usable "$package_dir"
+  deps=$(fm_pi_dep_node_modules "$package_dir")
   fixture="$TMP_ROOT/real-picker-primitives"
   mkdir -p "$fixture/lib" "$fixture/node_modules/@earendil-works"
   cp "$ROOT/.pi/extensions/lib/fm-branch-model-picker.ts" "$fixture/lib/fm-branch-model-picker.ts"
   ln -s "$package_dir" "$fixture/node_modules/@earendil-works/pi-coding-agent"
-  ln -s "$package_dir/node_modules/@earendil-works/pi-tui" "$fixture/node_modules/@earendil-works/pi-tui"
+  ln -s "$deps/@earendil-works/pi-tui" "$fixture/node_modules/@earendil-works/pi-tui"
   original_dir=$PWD
   cd "$fixture" || fail "could not enter the Pi picker primitives fixture"
   LIB="$fixture/lib/fm-branch-model-picker.ts" PI_VERSION_FILE="$package_dir/package.json" \
@@ -5236,12 +5241,14 @@ test_outcomes_tool_uses_stock_execution_and_export_consumers() {
     echo "skip: node not found for Pi outcomes rendering test"
     return
   fi
-  local package_dir package_version fixture out status
-  package_dir=${FM_PI_PACKAGE_DIR:-"$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
+  local package_dir deps package_version fixture out status
+  package_dir=$(fm_pi_package_dir)
   if [ ! -f "$package_dir/package.json" ]; then
     echo "skip: installed @earendil-works/pi-coding-agent package not found"
     return
   fi
+  fm_pi_require_usable "$package_dir"
+  deps=$(fm_pi_dep_node_modules "$package_dir")
   # This case compares the extension's own renderers against Pi's stock
   # rendering, so its verdict is only meaningful against the vendor contract
   # those renderers target: since Pi 0.84.4 the stock renderer no longer
@@ -5268,9 +5275,9 @@ test_outcomes_tool_uses_stock_execution_and_export_consumers() {
   cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$fixture/.pi/extensions/lib/fm-operational-input.ts"
   cp "$ROOT/.pi/extensions/lib/fm-execution-provider.ts" "$fixture/.pi/extensions/lib/fm-execution-provider.ts"
   ln -s "$package_dir" "$fixture/node_modules/@earendil-works/pi-coding-agent"
-  ln -s "$package_dir/node_modules/@earendil-works/pi-tui" "$fixture/node_modules/@earendil-works/pi-tui"
-  ln -s "$package_dir/node_modules/@earendil-works/pi-ai" "$fixture/node_modules/@earendil-works/pi-ai"
-  ln -s "$package_dir/node_modules/typebox" "$fixture/node_modules/typebox"
+  ln -s "$deps/@earendil-works/pi-tui" "$fixture/node_modules/@earendil-works/pi-tui"
+  ln -s "$deps/@earendil-works/pi-ai" "$fixture/node_modules/@earendil-works/pi-ai"
+  ln -s "$deps/typebox" "$fixture/node_modules/typebox"
 
   out=$(cd "$fixture" && EXT="$fixture/.pi/extensions/fm-branch-supervision.ts" PI_PACKAGE_DIR="$package_dir" node --input-type=module 2>&1 <<'JS'
 import { pathToFileURL } from "node:url";
