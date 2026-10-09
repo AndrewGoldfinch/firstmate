@@ -38,7 +38,9 @@ set -u
 fm_live_gate opt-in FM_PI_BRANCH_LIVE_E2E npm jq node
 export NODE_NO_WARNINGS=1
 
-PI_PACKAGE_DIR=${FM_PI_PACKAGE_DIR:-"$(npm root -g)/@earendil-works/pi-coding-agent"}
+# shellcheck source=tests/pi-package-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/pi-package-helpers.sh"
+PI_PACKAGE_DIR=$(fm_pi_package_dir)
 if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
   fail "Pi package absent: the live branch guard needs @earendil-works/pi-coding-agent installed (FM_PI_PACKAGE_DIR to override)"
 fi
@@ -81,10 +83,11 @@ while :; do
 done
 SH
 chmod +x "$repo/bin/fm-operational-input.sh" "$repo/bin/fm-watch-arm.sh"
+pi_nm=$(fm_pi_dep_node_modules "$PI_PACKAGE_DIR")
 ln -s "$PI_PACKAGE_DIR" "$repo/node_modules/@earendil-works/pi-coding-agent"
-ln -s "$PI_PACKAGE_DIR/node_modules/@earendil-works/pi-tui" "$repo/node_modules/@earendil-works/pi-tui"
-ln -s "$PI_PACKAGE_DIR/node_modules/@earendil-works/pi-ai" "$repo/node_modules/@earendil-works/pi-ai"
-ln -s "$PI_PACKAGE_DIR/node_modules/typebox" "$repo/node_modules/typebox"
+ln -s "$pi_nm/@earendil-works/pi-tui" "$repo/node_modules/@earendil-works/pi-tui"
+ln -s "$pi_nm/@earendil-works/pi-ai" "$repo/node_modules/@earendil-works/pi-ai"
+ln -s "$pi_nm/typebox" "$repo/node_modules/typebox"
 
 run_f09_probe() {
   FM_F09_LAB="$TMP_ROOT/f09" FM_F09_PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" \
@@ -574,7 +577,7 @@ cat > "$effortdir/models.json" <<'JSON'
   }
 }
 JSON
-PI_PACKAGE_DIR="$PI_PACKAGE_DIR" PI_CODING_AGENT_DIR="$effortdir" FM_LIVE_SESSIONS="$TMP_ROOT/effort-sessions" \
+PI_PACKAGE_DIR="$PI_PACKAGE_DIR" FM_PI_DEP_NODE_MODULES="$pi_nm" PI_CODING_AGENT_DIR="$effortdir" FM_LIVE_SESSIONS="$TMP_ROOT/effort-sessions" \
   node --input-type=module > "$TMP_ROOT/effort-output" 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
 
@@ -584,7 +587,7 @@ const { ModelRegistry, ModelRuntime, SessionManager, createAgentSession } = awai
 // The same specifier the extension imports; Pi's extension loader aliases it
 // to this package's own bundled copy.
 const { clampThinkingLevel, getSupportedThinkingLevels } = await import(
-  pathToFileURL(`${packageRoot}/node_modules/@earendil-works/pi-ai/dist/compat.js`).href
+  pathToFileURL(`${process.env.FM_PI_DEP_NODE_MODULES}/@earendil-works/pi-ai/dist/compat.js`).href
 );
 const runtime = await ModelRuntime.create({
   authPath: `${process.env.PI_CODING_AGENT_DIR}/auth.json`,

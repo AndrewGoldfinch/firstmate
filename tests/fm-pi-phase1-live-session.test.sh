@@ -25,7 +25,9 @@ set -u
 fm_live_gate opt-in FM_PI_PHASE1_LIVE_SESSION pi
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-PI_PACKAGE_DIR=${FM_PI_PACKAGE_DIR:-"$(npm root -g)/@earendil-works/pi-coding-agent"}
+# shellcheck source=tests/pi-package-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/pi-package-helpers.sh"
+PI_PACKAGE_DIR=$(fm_pi_package_dir)
 if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
   fail "Pi package absent: the live-session pilot needs @earendil-works/pi-coding-agent installed (FM_PI_PACKAGE_DIR to override)"
 fi
