@@ -226,6 +226,18 @@ if (!fallback.includes("FIRSTMATE WATCHER WAKE: signal: live-sdk probe")) {
   throw new Error(`watcher-owned fallback lost the wake reason: ${fallback}`);
 }
 if (!existsSync(`${home}/state/.branch-session`)) {
+  // The extension writes the pointer only on the branch success path, after
+  // createAgentSession returns and lock ownership is re-confirmed. This probe's
+  // intended outcome is an unpromptable branch, so an unpromptable settlement
+  // error means construction succeeded and only the first prompt failed; any
+  // other error, or no session store at all, means the branch build itself
+  // failed before the pointer write. Name that real construction failure
+  // instead of blaming SessionManager (docs/pi-durable/48-sessionmanager-pointer.md).
+  const sessionStore = `${home}/state/branch-session`;
+  const unpromptableBranch = /No API key|no credentials|no model available/i.test(offerFailure.message);
+  if (!unpromptableBranch || !existsSync(sessionStore)) {
+    throw new Error(`branch session was never created: the branch build failed before it persisted a session (${offerFailure.message})`);
+  }
   throw new Error("real SessionManager did not persist the branch session pointer");
 }
 // The real SessionManager writes the session file lazily (on its first

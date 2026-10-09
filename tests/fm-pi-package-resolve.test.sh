@@ -104,4 +104,18 @@ deps=$(fm_pi_dep_node_modules "$resolved")
 [ "$deps" = "$global_root/global" ] \
   || fail "global layout linked deps from '$deps', expected '$global_root/global'"
 
-pass "Pi SDK resolver finds the managed install or explicit override, and links sibling deps from the nested or hoisted layout"
+# --- installed-but-unusable package: require_usable refuses loudly ------------
+broken_root="$TMP_ROOT/broken"
+mkdir -p "$broken_root/pkg"
+printf '{}\n' > "$broken_root/pkg/package.json"
+if out=$(fm_pi_require_usable "$broken_root/pkg" 2>&1); then
+  fail "fm_pi_require_usable accepted a package with no sibling dependencies"
+fi
+case "$out" in
+  *"missing sibling dependencies"*) ;;
+  *) fail "fm_pi_require_usable did not name the missing dependencies: $out" ;;
+esac
+( fm_pi_require_usable "$resolved" ) \
+  || fail "fm_pi_require_usable rejected the complete global layout"
+
+pass "Pi SDK resolver finds the managed install or explicit override, links sibling deps from the nested or hoisted layout, and refuses an installed-but-unusable package"
