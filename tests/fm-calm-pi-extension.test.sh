@@ -1673,7 +1673,9 @@ async function assertStockHtmlRendering(command, submitData) {
   editorText = command;
   terminalInputHandler(submitData);
   const htmlRenderer = createToolHtmlRenderer({
-    getToolDefinition: (name) => tools.find((tool) => tool.name === name),
+    // Pi resolves tool renderers through getToolRenderers; getToolDefinition was
+    // never read, so the renderer produced no HTML and this sub-case aborted.
+    getToolRenderers: (name) => tools.find((tool) => tool.name === name),
     theme,
     cwd: process.cwd(),
   });
@@ -1704,7 +1706,7 @@ getKeybindings().setUserBindings({ "tui.input.submit": "alt+s" });
 editorText = "/export remapped.html";
 terminalInputHandler("\r");
 const unmatchedRenderer = createToolHtmlRenderer({
-  getToolDefinition: (name) => tools.find((tool) => tool.name === name),
+  getToolRenderers: (name) => tools.find((tool) => tool.name === name),
   theme,
   cwd: process.cwd(),
 });
@@ -2517,6 +2519,10 @@ test_queued_operational_escape_e2e() {
   config="$TMP_ROOT/queued-escape-config"
   sessions="$TMP_ROOT/queued-escape-sessions"
   mkdir -p "$project/.pi/extensions/lib" "$home/config" "$config" "$sessions"
+  # Pi binds queueing a follow-up to Alt+Enter only off Windows/WSL, where it is Ctrl+Q.
+  # Pin that one binding in the session config so this case sends the same real queue
+  # key on every host instead of depending on the platform default.
+  printf '%s\n' '{"app.message.followUp":"alt+enter"}' >"$config/keybindings.json"
   fm_git_init_commit "$project"
   cp "$EXT" "$project/.pi/extensions/fm-calm.ts"
   cp "$ASSISTANT_LAYOUT" "$project/.pi/extensions/lib/fm-calm-assistant-layout.ts"
