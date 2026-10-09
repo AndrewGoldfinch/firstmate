@@ -48,7 +48,7 @@ Both are test-harness drift against Pi 1.1.0, not Calm presentation defects, so
 
 ## Verification
 
-- `bin/fm-test-run.sh tests/fm-calm-pi-extension.test.sh` - exit 0, 0 skips, all 14
+- `bin/fm-test-run.sh tests/fm-calm-pi-extension.test.sh` - exit 0, 0 skips, all 15
   sub-cases pass, including the renderer and queued-row cases.
 - `bin/fm-test-run.sh tests/fm-pi-branch-extension.test.sh` - exit 0.
 - `(cd runtime/pi-durable && npm ci && npm test)` - 81 pass, 0 fail, 0 skipped.
