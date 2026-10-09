@@ -589,6 +589,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/50-harness-guard-sibling.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
