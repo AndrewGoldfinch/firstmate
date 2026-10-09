@@ -585,6 +585,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/49-live-e2e-dep-fix-verify.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
