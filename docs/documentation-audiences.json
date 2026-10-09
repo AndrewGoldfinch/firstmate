@@ -581,6 +581,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/48-sessionmanager-pointer.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
