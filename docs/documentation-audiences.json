@@ -597,6 +597,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/52-calm-renderer-pi110-fix.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
