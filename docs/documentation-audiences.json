@@ -593,6 +593,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/pi-durable/51-harness-guard-sibling-verify.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/pi-durable/AGENTS.md",
       "audience": "agent-runtime"
     },
