@@ -1040,6 +1040,34 @@ export default function (pi: ExtensionAPI) {
     owner.retryTimer = timer;
   }
 
+  // Startup ownership reclaim: session_start often fires while state/.lock
+  // still names a dead predecessor, so ownership reads "missing" and the
+  // immediate arm is skipped. Watch for the legitimate reclaim to this
+  // session and arm once it lands, within a bounded time. A live competing
+  // owner ("other") or a dead generation stops the wait without arming.
+  function scheduleOwnershipReclaim(owner: SessionGeneration): void {
+    if (!generationIsLive(owner) || liveArmChild(owner) || owner.retryTimer) return;
+    let attempts = 0;
+    const watch = (): void => {
+      if (!generationIsLive(owner) || liveArmChild(owner)) return;
+      const ownership = lockOwnership();
+      if (ownership === "owned") {
+        activateOwnedWatch(owner);
+        return;
+      }
+      if (ownership === "other") return;
+      attempts += 1;
+      if (attempts > retryLimit) return;
+      const timer = setTimeout(() => {
+        if (owner.retryTimer === timer) owner.retryTimer = null;
+        watch();
+      }, retryDelay(attempts));
+      timer.unref();
+      owner.retryTimer = timer;
+    };
+    watch();
+  }
+
   function startArm(owner: SessionGeneration, predecessorArmPid = ""): ArmResult {
     if (!generationIsLive(owner)) return { ok: false, message: shuttingDownMessage };
     const ownership = lockOwnership();
@@ -1210,7 +1238,10 @@ export default function (pi: ExtensionAPI) {
   pi.on?.("session_start", async () => {
     if (generation.stopping) generation = createGeneration();
     activateGeneration(generation);
-    if (lockOwnership() !== "owned") return;
+    if (lockOwnership() !== "owned") {
+      scheduleOwnershipReclaim(generation);
+      return;
+    }
     activateOwnedWatch(generation);
   });
   pi.on?.("session_shutdown", async (event) => {
