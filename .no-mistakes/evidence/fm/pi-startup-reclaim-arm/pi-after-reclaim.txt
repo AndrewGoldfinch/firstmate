@@ -1,0 +1,48 @@
+AFTER RECLAIM
+lock acquired: harness pid 3065559
+3065559
+.
+..
+.lock
+.pi-watch-extension-loaded
+.wake-queue
+ watcher: FAILED - refusing to arm from a disposable validation checkout:
+ /home/andy/.no-mistakes/worktrees/6fb972a38ed9/01M4Q6BV9JKKSKJF62CYG2CT5K/bin
+
+ Run bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.
+
+
+ Watcher continuity failure — draining the queued wake first.
+
+
+ $ ls -R | head -n 200; echo "---"; ls -la bin/ 2>&1; echo "---"; cat bin/fm-wake-drain.sh 2>&1 | head -n 200
+
+ ... (616 earlier lines, ctrl+o to expand)
+ # ever prompts the branch (an empty eligible set means no prompt at all), so a
+ # missing or empty file here means this ran outside that handoff - a wiring
+ # bug, never "nothing eligible" - and must fail loudly rather than silently
+ # draining or acking nothing.
+ require_branch_eligible_rows() {
+
+ Took 0.0s
+
+
+ Evaluating tool call constraints and ownership rules before deciding on fm_watch_arm_pi invocation.
+
+
+ $ bin/fm-wake-drain.sh 2>&1; echo "EXIT:$?" (timeout 30s)
+
+ EXIT:0
+
+ Took 0.4s
+
+
+
+ $ ...
+
+
+── ⠴ Working ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+~/.no-mistakes/worktrees/6fb972a38ed9/01M4Q6BV9JKKSKJF62CYG2CT5K (detached)
+↑13k ↓658 R1.9k CH15.4% $0.001 1.2%/1.0M (auto)                                      muse-spark-1.3-contributor • medium
