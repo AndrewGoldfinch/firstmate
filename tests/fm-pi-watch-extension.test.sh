@@ -3277,6 +3277,8 @@ const startup = makePi();
 mod.default(startup.pi);
 await startup.handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, {});
 if (armRows().length !== 0) throw new Error("stale-lock startup armed before the reclaim");
+await new Promise((resolve) => setTimeout(resolve, 100));
+if (armRows().length !== 0) throw new Error("stale-lock startup armed during delayed reclaim");
 writeFileSync(lock, `${process.pid}\n`);
 await waitForArmCount(1, "delayed reclaim arm");
 

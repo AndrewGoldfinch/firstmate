@@ -35,7 +35,7 @@
 // consumption changes.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, unlinkSync, unwatchFile, watchFile, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
@@ -102,6 +102,7 @@ type SessionGeneration = {
   replacement: boolean;
   child: ChildProcess | null;
   retryTimer: ReturnType<typeof setTimeout> | null;
+  reclaimListener: (() => void) | null;
   cleanupTimer: ReturnType<typeof setTimeout> | null;
   retryFailures: number;
   restoring: boolean;
@@ -517,6 +518,7 @@ function createGeneration(): SessionGeneration {
     replacement: false,
     child: null,
     retryTimer: null,
+    reclaimListener: null,
     cleanupTimer: null,
     retryFailures: 0,
     restoring: false,
@@ -538,6 +540,8 @@ function generationIsLive(generation: SessionGeneration): boolean {
 
 function relinquishGeneration(generation: SessionGeneration): void {
   generation.stopping = true;
+  if (generation.reclaimListener) unwatchFile(`${state}/.lock`, generation.reclaimListener);
+  generation.reclaimListener = null;
   if (generation.retryTimer) clearTimeout(generation.retryTimer);
   if (generation.cleanupTimer) clearTimeout(generation.cleanupTimer);
   generation.retryTimer = null;
@@ -1040,32 +1044,18 @@ export default function (pi: ExtensionAPI) {
     owner.retryTimer = timer;
   }
 
-  // Startup ownership reclaim: session_start often fires while state/.lock
-  // still names a dead predecessor, so ownership reads "missing" and the
-  // immediate arm is skipped. Watch for the legitimate reclaim to this
-  // session and arm once it lands, within a bounded time. A live competing
-  // owner ("other") or a dead generation stops the wait without arming.
   function scheduleOwnershipReclaim(owner: SessionGeneration): void {
-    if (!generationIsLive(owner) || liveArmChild(owner) || owner.retryTimer) return;
-    let attempts = 0;
-    const watch = (): void => {
-      if (!generationIsLive(owner) || liveArmChild(owner)) return;
+    if (!generationIsLive(owner) || liveArmChild(owner) || owner.reclaimListener) return;
+    const observe = (): void => {
       const ownership = lockOwnership();
-      if (ownership === "owned") {
-        activateOwnedWatch(owner);
-        return;
-      }
-      if (ownership === "other") return;
-      attempts += 1;
-      if (attempts > retryLimit) return;
-      const timer = setTimeout(() => {
-        if (owner.retryTimer === timer) owner.retryTimer = null;
-        watch();
-      }, retryDelay(attempts));
-      timer.unref();
-      owner.retryTimer = timer;
+      if (generationIsLive(owner) && !liveArmChild(owner) && ownership === "missing") return;
+      unwatchFile(`${state}/.lock`, observe);
+      owner.reclaimListener = null;
+      if (generationIsLive(owner) && ownership === "owned") activateOwnedWatch(owner);
     };
-    watch();
+    owner.reclaimListener = observe;
+    watchFile(`${state}/.lock`, { persistent: false, interval: retryBaseMs }, observe);
+    observe();
   }
 
   function startArm(owner: SessionGeneration, predecessorArmPid = ""): ArmResult {
@@ -1078,6 +1068,8 @@ export default function (pi: ExtensionAPI) {
         message: "watcher: not armed - no live session holds the lock; run bin/fm-session-start.sh to reclaim it, then call fm_watch_arm_pi to re-arm",
       };
     }
+    if (owner.reclaimListener) unwatchFile(`${state}/.lock`, owner.reclaimListener);
+    owner.reclaimListener = null;
     publishGenerationOwner(owner, "active");
     if (liveArmChild(owner)) {
       return {
